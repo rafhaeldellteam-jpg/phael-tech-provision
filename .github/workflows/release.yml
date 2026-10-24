@@ -1,8 +1,12 @@
 # Gera o "Phael Tech Provision.exe" no Windows e anexa à release.
-# Como publicar uma versão: GitHub -> Releases -> "Draft a new release" -> tag v2.0.1 -> Publish.
+# Como publicar uma versão (qualquer uma das duas):
+#   - enviar uma tag:  git tag v2.0.1 && git push origin v2.0.1
+#   - ou no site: Releases -> "Draft a new release" -> tag v2.0.1 -> Publish
 name: Publicar versão
 
 on:
+  push:
+    tags: ["v*"]
   release:
     types: [published]
 
@@ -20,7 +24,7 @@ jobs:
           python-version: "3.13"
 
       - name: Aplicar versão da tag
-        run: python tools/set_version.py "${{ github.event.release.tag_name }}"
+        run: python tools/set_version.py "${{ github.event.release.tag_name || github.ref_name }}"
 
       - name: Instalar dependências
         run: python -m pip install -r requirements.txt
@@ -37,7 +41,9 @@ jobs:
       - name: Anexar à release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.release.tag_name }}
+          tag_name: ${{ github.event.release.tag_name || github.ref_name }}
+          name: Phael Tech Provision ${{ github.event.release.tag_name || github.ref_name }}
+          generate_release_notes: true
           files: |
             dist/PhaelTechProvision.exe
             dist/PhaelTechProvision.exe.sha256
