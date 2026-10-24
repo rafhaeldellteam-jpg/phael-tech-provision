@@ -1,0 +1,518 @@
+"""Phael Tech Provision 2 — ponto de entrada.
+
+Interface em HTML/CSS (pasta ui) dentro de uma janela nativa (pywebview + Edge WebView2).
+Toda a lógica roda em Python (pasta core) e conversa com a interface pela classe Api.
+"""
+from __future__ import annotations
+
+import ctypes
+import json
+import os
+import queue
+import subprocess
+import sys
+import threading
+import time
+import traceback
+import webbrowser
+from pathlib import Path
+
+from core import drivers, maintenance, programs, provision, sysinfo, updater
+from core.provision import NeedsReboot
+from core.util import (APP_NAME, APP_VERSION, IS_WIN, bundle_dir, find_resource, fmt_bytes, is_admin, log,
+                       relaunch_as_admin, run, work_dir)
+
+STEP_ORDER = ["power", "office", "apps", "wu", "vendor", "finalize"]
+STEP_TITLES = {"power": "Energia", "office": "Microsoft Office", "apps": "Aplicativos", "wu": "Windows Update",
+               "vendor": "Drivers do fabricante", "finalize": "Finalização"}
+
+
+class Api:
+    """Métodos chamados pelo JavaScript (window.pywebview.api.*). Cada chamada roda em thread própria."""
+
+    def __init__(self) -> None:
+        self._window = None
+        self._events: queue.Queue = queue.Queue()
+        self._cancel = threading.Event()
+        self._busy = threading.Lock()          # provisionamento / programas / drivers (não rodam juntos)
+        self._maint_busy = threading.Lock()
+        self._inventory: dict | None = None
+        self._inv_lock = threading.Lock()
+        self._sensors = maintenance.SensorReader()
+        self._continuing = "--continuar" in sys.argv
+        log.add_sink(lambda ts, level, msg: self._emit({"t": "log", "ts": ts, "level": level, "msg": msg}))
+
+    # ------------------------------------------------------------------ eventos -> interface
+    def _attach(self, window) -> None:
+        self._window = window
+        threading.Thread(target=self._pump, daemon=True).start()
+
+    def _emit(self, ev: dict) -> None:
+        self._events.put(ev)
+
+    def _pump(self) -> None:
+        while True:
+            batch = [self._events.get()]
+            time.sleep(0.12)
+            while not self._events.empty() and len(batch) < 300:
+                batch.append(self._events.get_nowait())
+            if self._window is None:
+                continue
+            try:
+                payload = json.dumps(batch, ensure_ascii=False)
+                self._window.evaluate_js(f"window.PT && window.PT.onEvents({payload})")
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------ inicialização
+    def boot(self) -> dict:
+        state = provision.load_state() if self._continuing else {}
+        return {
+            "app": APP_NAME, "version": APP_VERSION, "admin": is_admin(), "continuing": bool(state),
+            "state": state,
+            "programs": [{k: v for k, v in p.items() if k in ("key", "title", "desc", "icon", "default", "note")}
+                         | {"available": programs.is_available(p)} for p in programs.PROGRAMS],
+            "offline": [{k: v for k, v in p.items() if k in ("key", "vendor", "title", "desc")}
+                        | {"available": drivers.offline_available(p)} for p in drivers.OFFLINE_PACKS],
+            "repair": [{k: s[k] for k in ("key", "title", "desc")} for s in maintenance.REPAIR_STEPS],
+            "log_path": str(log.path),
+        }
+
+    def inventory(self, refresh: bool = False) -> dict:
+        with self._inv_lock:
+            if self._inventory is None or refresh:
+                try:
+                    self._inventory = sysinfo.collect_inventory()
+                except Exception as e:
+                    log(f"Falha ao ler o hardware: {e}", "error")
+                    return {"error": str(e)}
+            return self._inventory
+
+    def live(self) -> dict:
+        try:
+            return sysinfo.live_metrics()
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ------------------------------------------------------------------ utilidades
+    def open_url(self, url: str) -> None:
+        if url:
+            webbrowser.open(url)
+
+    def open_path(self, path: str) -> None:
+        if IS_WIN and path and os.path.exists(path):
+            os.startfile(path)
+
+    def open_logs(self) -> None:
+        self.open_path(str(log.path.parent))
+
+    def copy_text(self, text: str) -> bool:
+        if not IS_WIN:
+            return False
+        try:
+            p = subprocess.Popen(["clip"], stdin=subprocess.PIPE, creationflags=0x08000000)
+            p.communicate(text.encode("utf-16-le"))
+            return True
+        except Exception:
+            return False
+
+    def reboot_now(self) -> None:
+        log("Reiniciando o computador…")
+        provision.reboot(5)
+
+    def cancel(self) -> None:
+        self._cancel.set()
+        log("Cancelamento solicitado — a etapa atual será interrompida.", "warn")
+
+    def save_report(self) -> str:
+        try:
+            path = provision.write_report(self.inventory())
+            log(f"Relatório salvo em {path}", "ok")
+            return path
+        except Exception as e:
+            log(f"Falha ao salvar relatório: {e}", "error")
+            return ""
+
+    # ------------------------------------------------------------------ provisionamento
+    def start_provision(self, opts: dict) -> dict:
+        if not self._busy.acquire(blocking=False):
+            return {"ok": False, "msg": "Já existe uma tarefa em andamento."}
+        self._cancel.clear()
+        steps = [s for s in STEP_ORDER if opts.get("steps", {}).get(s)]
+        if not steps:
+            self._busy.release()
+            return {"ok": False, "msg": "Nenhuma etapa marcada."}
+        threading.Thread(target=self._provision_worker, args=(steps, opts), daemon=True).start()
+        return {"ok": True}
+
+    def resume_provision(self) -> dict:
+        state = provision.load_state()
+        if not state.get("pending"):
+            return {"ok": False, "msg": "Não há provisionamento pendente."}
+        opts = state.get("opts", {})
+        opts["steps"] = {s: True for s in state["pending"]}
+        opts["resumed"] = True
+        log("Continuando o provisionamento após a reinicialização…")
+        return self.start_provision(opts)
+
+    def discard_resume(self) -> None:
+        provision.clear_state()
+        provision.clear_resume_on_boot()
+        log("Continuação automática descartada.")
+
+    def _step_progress(self, key: str):
+        def cb(pct: float, text: str):
+            self._emit({"t": "step", "key": key, "status": "run", "pct": pct, "text": text})
+        return cb
+
+    def _provision_worker(self, steps: list[str], opts: dict) -> None:
+        all_ok = True
+        try:
+            log(f"Provisionamento iniciado: {', '.join(STEP_TITLES[s] for s in steps)}.")
+            for s in STEP_ORDER:
+                if s not in steps and not opts.get("resumed"):
+                    self._emit({"t": "step", "key": s, "status": "skip", "pct": 0, "text": "Não selecionado"})
+            for i, key in enumerate(steps):
+                if self._cancel.is_set():
+                    break
+                self._emit({"t": "step", "key": key, "status": "run", "pct": -1, "text": "Iniciando…"})
+                prog = self._step_progress(key)
+                try:
+                    msg = self._run_step(key, prog, opts)
+                    self._emit({"t": "step", "key": key, "status": "ok", "pct": 100, "text": msg})
+                except NeedsReboot as nr:
+                    pending = steps[i:] if key in ("wu", "vendor") else steps[i + 1:]
+                    self._emit({"t": "step", "key": key, "status": "wait", "pct": 100,
+                                "text": "Continua após reiniciar"})
+                    self._schedule_reboot(pending, opts, str(nr))
+                    return
+                except Exception as e:
+                    all_ok = False
+                    if self._cancel.is_set():
+                        self._emit({"t": "step", "key": key, "status": "err", "pct": 0, "text": "Cancelado"})
+                        break
+                    log(f"{STEP_TITLES[key]}: {e}", "error")
+                    self._emit({"t": "step", "key": key, "status": "err", "pct": 0, "text": str(e)[:160]})
+            provision.clear_state()
+            provision.clear_resume_on_boot()
+            done_msg = ("Provisionamento cancelado." if self._cancel.is_set() else
+                        "Provisionamento concluído." if all_ok else "Provisionamento concluído com erros.")
+            log(done_msg, "ok" if all_ok and not self._cancel.is_set() else "warn")
+            self._emit({"t": "done", "ok": all_ok and not self._cancel.is_set(), "msg": done_msg})
+            if all_ok and opts.get("reboot_end") and not self._cancel.is_set():
+                self._countdown_reboot(30, "Reiniciando para concluir o provisionamento")
+        except Exception:
+            log("Erro inesperado: " + traceback.format_exc(), "error")
+            self._emit({"t": "done", "ok": False, "msg": "Erro inesperado — veja o log."})
+        finally:
+            self._busy.release()
+
+    def _run_step(self, key: str, prog, opts: dict) -> str:
+        inv = self.inventory()
+        vendor = (inv or {}).get("vendor", "other")
+        if key == "power":
+            return provision.disable_fast_startup(prog, opts.get("power_button", True), opts.get("no_sleep", True))
+        if key == "office":
+            return provision.install_office(prog, self._cancel)
+        if key == "apps":
+            keys = [k for k in opts.get("apps", []) if k != "office"]
+            if not keys:
+                return "Nenhum aplicativo selecionado."
+            fails = self._install_programs(keys, prog)
+            if fails:
+                raise RuntimeError(f"{fails} aplicativo(s) com falha — veja a aba Aplicativos.")
+            return f"{len(keys)} aplicativo(s) instalado(s)."
+        if key == "wu":
+            return provision.windows_update(prog, self._cancel)
+        if key == "vendor":
+            return drivers.vendor_drivers(vendor, prog, self._cancel, opts.get("include_bios", False))
+        if key == "finalize":
+            self._inventory = None
+            return provision.finalize(prog, self.inventory())
+        raise ValueError(key)
+
+    def _schedule_reboot(self, pending: list[str], opts: dict, reason: str) -> None:
+        state = provision.load_state()
+        state.update({"pending": pending, "opts": opts, "saved": time.strftime("%d/%m/%Y %H:%M")})
+        provision.save_state(state)
+        if provision.set_resume_on_boot():
+            log("Programa agendado para abrir sozinho após reiniciar e continuar de onde parou.", "ok")
+        else:
+            log("Não consegui agendar a reabertura automática — abra o programa após reiniciar.", "warn")
+        log(reason, "warn")
+        if opts.get("auto_reboot", True):
+            self._countdown_reboot(20, "Reiniciando para continuar o provisionamento")
+        else:
+            self._emit({"t": "reboot_prompt", "msg": reason})
+
+    def _countdown_reboot(self, seconds: int, msg: str) -> None:
+        self._cancel.clear()
+        for s in range(seconds, 0, -1):
+            self._emit({"t": "countdown", "s": s, "msg": msg})
+            if self._cancel.wait(1):
+                self._emit({"t": "countdown", "s": 0, "msg": "Reinicialização cancelada."})
+                log("Reinicialização automática cancelada pelo usuário.", "warn")
+                return
+        self._emit({"t": "countdown", "s": 0, "msg": "Reiniciando…"})
+        provision.reboot(3, msg)
+
+    # ------------------------------------------------------------------ aplicativos
+    def install_programs(self, keys: list[str]) -> dict:
+        if not self._busy.acquire(blocking=False):
+            return {"ok": False, "msg": "Já existe uma tarefa em andamento."}
+        self._cancel.clear()
+
+        def worker():
+            try:
+                fails = self._install_programs(keys, None)
+                self._emit({"t": "apps_done", "ok": fails == 0})
+            finally:
+                self._busy.release()
+        threading.Thread(target=worker, daemon=True).start()
+        return {"ok": True}
+
+    def _install_programs(self, keys: list[str], step_prog) -> int:
+        catalog = {p["key"]: p for p in programs.PROGRAMS}
+        fails = 0
+        for n, key in enumerate(keys, 1):
+            entry = catalog.get(key)
+            if not entry or self._cancel.is_set():
+                continue
+            if step_prog:
+                step_prog(100 * (n - 1) / len(keys), f"{n}/{len(keys)}: {entry['title']}")
+
+            def cb(pct, text, key=key):
+                self._emit({"t": "app", "key": key, "status": "run", "pct": pct, "text": text})
+            self._emit({"t": "app", "key": key, "status": "run", "pct": -1, "text": "Iniciando…"})
+            try:
+                msg = programs.install_program(entry, cb, self._cancel)
+                self._emit({"t": "app", "key": key, "status": "ok", "pct": 100, "text": msg})
+            except Exception as e:
+                fails += 1
+                log(f"{entry['title']}: {e}", "error")
+                self._emit({"t": "app", "key": key, "status": "err", "pct": 0, "text": str(e)[:140]})
+        return fails
+
+    def program_status(self) -> dict:
+        return {p["key"]: programs.is_installed(p) for p in programs.PROGRAMS}
+
+    # ------------------------------------------------------------------ drivers
+    def run_drivers(self, mode: str, include_bios: bool = False) -> dict:
+        """mode: 'vendor' | 'wu' | 'offline:<key>'"""
+        if not self._busy.acquire(blocking=False):
+            return {"ok": False, "msg": "Já existe uma tarefa em andamento."}
+        self._cancel.clear()
+
+        def cb(pct, text):
+            self._emit({"t": "drv", "mode": mode, "status": "run", "pct": pct, "text": text})
+
+        def worker():
+            try:
+                self._emit({"t": "drv", "mode": mode, "status": "run", "pct": -1, "text": "Iniciando…"})
+                if mode == "vendor":
+                    msg = drivers.vendor_drivers(self.inventory().get("vendor", "other"), cb, self._cancel, include_bios)
+                elif mode == "wu":
+                    msg = drivers.windows_update_drivers(cb, self._cancel)
+                else:
+                    pack = next(p for p in drivers.OFFLINE_PACKS if p["key"] == mode.split(":", 1)[1])
+                    msg = drivers.install_offline(pack, cb, self._cancel)
+                self._emit({"t": "drv", "mode": mode, "status": "ok", "pct": 100, "text": msg})
+            except NeedsReboot as nr:
+                self._emit({"t": "drv", "mode": mode, "status": "ok", "pct": 100, "text": "Instalado — reinicie"})
+                self._emit({"t": "reboot_prompt", "msg": str(nr)})
+            except Exception as e:
+                log(f"Drivers: {e}", "error")
+                self._emit({"t": "drv", "mode": mode, "status": "err", "pct": 0, "text": str(e)[:160]})
+            finally:
+                self._inventory = None
+                self._busy.release()
+        threading.Thread(target=worker, daemon=True).start()
+        return {"ok": True}
+
+    # ------------------------------------------------------------------ rede
+    def network(self) -> dict:
+        try:
+            return maintenance.network_info()
+        except Exception as e:
+            return {"error": str(e)}
+
+    def connectivity(self, gateway: str = "") -> dict:
+        return maintenance.connectivity_test(lambda l: self._emit({"t": "out", "ch": "net", "line": l}), gateway)
+
+    # ------------------------------------------------------------------ manutenção
+    def maintenance(self, action: str) -> dict:
+        if not self._maint_busy.acquire(blocking=False):
+            return {"ok": False, "msg": "Aguarde a tarefa de manutenção atual terminar."}
+
+        def out(line):
+            self._emit({"t": "out", "ch": "clean", "line": line})
+
+        def worker():
+            before = maintenance.free_space()
+            try:
+                if action == "temp":
+                    maintenance.clean_temp(out)
+                elif action == "wu":
+                    maintenance.clean_windows_update(out)
+                elif action == "components":
+                    maintenance.clean_component_store(out, self._cancel)
+                elif action == "bin":
+                    maintenance.empty_recycle_bin(out)
+                elif action == "all":
+                    maintenance.clean_temp(out)
+                    maintenance.clean_windows_update(out)
+                    maintenance.empty_recycle_bin(out)
+                elif action == "analyze":
+                    maintenance.analyze_space(out)
+                elif action == "startup":
+                    items = maintenance.startup_programs()
+                    out(f"{len(items)} programa(s) iniciam com o Windows:")
+                    for it in items:
+                        out(f"• {it.get('Name')} — {it.get('Command')}")
+            except Exception as e:
+                out(f"Erro: {e}")
+            finally:
+                freed = max(0, maintenance.free_space() - before)
+                self._emit({"t": "clean_done", "freed": fmt_bytes(freed), "free": fmt_bytes(maintenance.free_space())})
+                self._maint_busy.release()
+        threading.Thread(target=worker, daemon=True).start()
+        return {"ok": True}
+
+    def free_space(self) -> str:
+        return fmt_bytes(maintenance.free_space())
+
+    def repair(self, keys: list[str]) -> dict:
+        if not self._maint_busy.acquire(blocking=False):
+            return {"ok": False, "msg": "Aguarde a tarefa de manutenção atual terminar."}
+        self._cancel.clear()
+
+        def worker():
+            try:
+                for st in maintenance.REPAIR_STEPS:
+                    if st["key"] not in keys or self._cancel.is_set():
+                        continue
+                    self._emit({"t": "rep", "key": st["key"], "status": "run", "pct": -1})
+                    self._emit({"t": "out", "ch": "repair", "line": f"▶ {st['title']}"})
+                    rc = maintenance.run_repair_step(
+                        st, lambda l: self._emit({"t": "out", "ch": "repair", "line": l}),
+                        lambda p, k=st["key"]: self._emit({"t": "rep", "key": k, "status": "run", "pct": p}),
+                        self._cancel)
+                    ok = rc == 0
+                    self._emit({"t": "rep", "key": st["key"], "status": "ok" if ok else "err", "pct": 100 if ok else 0})
+                    log(f"{st['title']}: {'concluído' if ok else f'falhou (código {rc})'}", "ok" if ok else "error")
+                self._emit({"t": "rep_done"})
+            finally:
+                self._maint_busy.release()
+        threading.Thread(target=worker, daemon=True).start()
+        return {"ok": True}
+
+    # ------------------------------------------------------------------ atualização (GitHub)
+    def update_check(self) -> dict:
+        info = updater.check()
+        info["can_install"] = updater.can_self_update()
+        info["busy"] = self._busy.locked() or bool(provision.load_state().get("pending"))
+        if info.get("available"):
+            log(f"Nova versão disponível: {info['version']} (atual {info.get('current')}).", "ok")
+        return info
+
+    def update_install(self) -> dict:
+        if self._busy.locked():
+            return {"ok": False, "msg": "Aguarde a tarefa atual terminar para atualizar."}
+        info = updater.check()
+        if not info.get("available"):
+            return {"ok": False, "msg": info.get("error") or "Você já está na versão mais recente."}
+
+        def worker():
+            try:
+                log(f"Baixando a versão {info['version']}…")
+                last = [-10.0]
+
+                def prog(p):
+                    if p - last[0] >= 2 or p >= 100:
+                        last[0] = p
+                        self._emit({"t": "upd", "status": "download", "pct": p})
+                path = updater.download(info, prog)
+                log("Download conferido (SHA-256). Instalando a atualização…", "ok")
+                updater.apply(path)
+                self._emit({"t": "upd", "status": "restart", "pct": 100})
+                time.sleep(2.5)
+                if self._window is not None:
+                    self._window.destroy()
+                os._exit(0)
+            except Exception as e:
+                log(f"Falha na atualização: {e}", "error")
+                self._emit({"t": "upd", "status": "error", "msg": str(e)})
+        threading.Thread(target=worker, daemon=True).start()
+        return {"ok": True, "version": info["version"]}
+
+    # ------------------------------------------------------------------ sensores
+    def sensors(self) -> dict:
+        if not self._sensors.start():
+            return {"error": self._sensors.error}
+        data = self._sensors.read()
+        return data or {"waiting": True, "error": self._sensors.error}
+
+    def _shutdown(self) -> None:
+        self._sensors.stop()
+
+
+# =========================================================================== janela
+def _message_box(text: str, title: str = APP_NAME) -> None:
+    if IS_WIN:
+        ctypes.windll.user32.MessageBoxW(None, text, title, 0x40)
+    else:
+        print(text)
+
+
+def _ensure_webview2() -> None:
+    """Se o runtime do Edge WebView2 não existir, tenta instalar o instalador da pasta Recursos."""
+    if not IS_WIN:
+        return
+    import winreg
+    keys = [r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+            r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"]
+    for k in keys:
+        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                with winreg.OpenKey(hive, k) as h:
+                    if winreg.QueryValueEx(h, "pv")[0] not in ("", "0.0.0.0"):
+                        return
+            except OSError:
+                continue
+    setup = find_resource("MicrosoftEdgeWebview2Setup.exe", "MicrosoftEdgeWebView2RuntimeInstallerX64.exe")
+    if setup:
+        run([str(setup), "/silent", "/install"], timeout=900)
+
+
+def main() -> None:
+    if IS_WIN and not is_admin():
+        if relaunch_as_admin():
+            return
+        _message_box("Execute o Phael Tech Provision como administrador.")
+        return
+    try:
+        import webview
+    except ImportError:
+        _message_box("Biblioteca pywebview ausente. Rode o build.bat para gerar o executável.")
+        return
+
+    _ensure_webview2()
+    api = Api()
+    ui = bundle_dir() / "ui" / "index.html"
+    window = webview.create_window(
+        f"{APP_NAME} {APP_VERSION}", url=str(ui), js_api=api, width=1440, height=900, min_size=(1100, 700),
+        background_color="#071019", maximized=True, text_select=False)
+    api._attach(window)
+    window.events.closed += api._shutdown
+    log(f"{APP_NAME} {APP_VERSION} iniciado (admin={is_admin()}).")
+    try:
+        webview.start(gui="edgechromium" if IS_WIN else None, private_mode=False,
+                      storage_path=str(work_dir() / "webview"), debug="--debug" in sys.argv)
+    except Exception as e:
+        _message_box("Não foi possível abrir a interface (Microsoft Edge WebView2 ausente?).\n\n"
+                     "Coloque o arquivo MicrosoftEdgeWebview2Setup.exe na pasta Recursos ou instale o "
+                     f"WebView2 Runtime e abra novamente.\n\nDetalhe: {e}")
+
+
+if __name__ == "__main__":
+    main()

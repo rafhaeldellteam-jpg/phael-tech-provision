@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phael Tech Provision</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="shell">
+
+  <!-- ================= topo ================= -->
+  <header class="top">
+    <div class="brand">
+      <img src="assets/logo.png" alt="" class="brand-logo">
+      <div class="brand-name"><b>Phael Tech</b><span>Provision</span></div>
+    </div>
+    <p class="tagline">Preparando sua máquina<br>para o melhor desempenho.</p>
+    <div class="machine" id="machine">
+      <div class="m-block">
+        <svg class="ic"><use href="#i-monitor"/></svg>
+        <div><small>Nome da máquina</small><strong id="m-host">—</strong></div>
+      </div>
+      <div class="m-block">
+        <svg class="ic"><use href="#i-windows"/></svg>
+        <div><small id="m-os">Windows</small><strong id="m-cpu">Lendo hardware…</strong></div>
+      </div>
+      <div class="m-block">
+        <svg class="ic"><use href="#i-tag"/></svg>
+        <div><small id="m-serial-label">Service Tag</small><strong id="m-serial" class="mono">—</strong></div>
+      </div>
+    </div>
+    <button class="icon-btn" id="theme-btn" title="Alternar modo claro/escuro" aria-label="Alternar tema">
+      <svg class="ic sun"><use href="#i-sun"/></svg><svg class="ic moon"><use href="#i-moon"/></svg>
+    </button>
+  </header>
+
+  <!-- ================= menu ================= -->
+  <nav class="side" id="nav">
+    <button data-page="provision" class="active"><svg class="ic"><use href="#i-rocket"/></svg>Provisionamento</button>
+    <button data-page="hardware"><svg class="ic"><use href="#i-chip"/></svg>Hardware</button>
+    <button data-page="drivers"><svg class="ic"><use href="#i-driver"/></svg>Drivers</button>
+    <button data-page="apps"><svg class="ic"><use href="#i-grid"/></svg>Aplicativos</button>
+    <button data-page="network"><svg class="ic"><use href="#i-wifi"/></svg>Rede</button>
+    <button data-page="cleanup"><svg class="ic"><use href="#i-broom"/></svg>Limpeza</button>
+    <button data-page="repair"><svg class="ic"><use href="#i-wrench"/></svg>Reparo do Windows</button>
+    <button data-page="temps"><svg class="ic"><use href="#i-thermo"/></svg>Temperatura</button>
+    <button data-page="logs"><svg class="ic"><use href="#i-doc"/></svg>Logs</button>
+    <div class="side-foot">
+      <img src="assets/logo.png" alt="">
+      <div><b>Phael Tech</b> <span>Provision</span><small>Soluções para um setup perfeito.</small></div>
+      <button class="ver-btn" id="version" title="Verificar atualizações">v2.0.0</button>
+    </div>
+  </nav>
+
+  <!-- ================= conteúdo ================= -->
+  <main class="content">
+
+    <!-- ===== PROVISIONAMENTO ===== -->
+    <section class="page active" id="page-provision">
+      <div class="prov-grid">
+        <div class="panel prov-main">
+          <div class="page-head">
+            <svg class="head-ic"><use href="#i-gear"/></svg>
+            <div><h1>Provisionamento</h1><p>Configure e prepare a máquina de forma automática e segura.</p></div>
+          </div>
+
+          <ol class="stepper" id="stepper">
+            <li data-phase="0"><span class="dot">1</span><span class="lbl">Preparação</span></li>
+            <li data-phase="1"><span class="dot">2</span><span class="lbl">Instalações</span></li>
+            <li data-phase="2"><span class="dot">3</span><span class="lbl">Atualizações</span></li>
+            <li data-phase="3"><span class="dot">4</span><span class="lbl">Finalização</span></li>
+          </ol>
+
+          <div class="resume-bar" id="resume-bar" hidden>
+            <svg class="ic"><use href="#i-refresh"/></svg>
+            <div><b>Continuando após a reinicialização</b><span id="resume-text">O provisionamento retoma em 10 s.</span></div>
+            <button class="btn ghost sm" id="resume-cancel">Não continuar</button>
+            <button class="btn primary sm" id="resume-now">Continuar agora</button>
+          </div>
+
+          <div class="tasks" id="tasks"></div>
+
+          <div class="opts">
+            <label class="switch"><input type="checkbox" id="opt-autoreboot" checked><i></i>Reiniciar sozinho quando uma atualização pedir (o programa reabre e continua)</label>
+            <label class="switch"><input type="checkbox" id="opt-bios"><i></i>Incluir atualizações de BIOS e firmware do fabricante</label>
+            <label class="switch"><input type="checkbox" id="opt-endreboot"><i></i>Reiniciar ao final do provisionamento</label>
+          </div>
+
+          <div class="prov-foot">
+            <div class="note"><svg class="ic"><use href="#i-shield"/></svg>
+              <p><b>Tudo roda sozinho, sem precisar clicar em nada.</b> Ao final, um relatório com Service Tag, hardware e o que foi instalado fica salvo na Área de Trabalho.</p></div>
+            <div class="foot-actions">
+              <button class="btn ghost" data-goto="logs"><svg class="ic"><use href="#i-doc"/></svg>Ver logs</button>
+              <button class="btn danger" id="prov-cancel" hidden>Cancelar</button>
+              <button class="btn primary" id="prov-start"><svg class="ic"><use href="#i-play"/></svg>Iniciar provisionamento</button>
+            </div>
+          </div>
+        </div>
+
+        <aside class="prov-side">
+          <div class="panel">
+            <h3 class="panel-title"><svg class="ic ok"><use href="#i-check-circle"/></svg>Progresso geral</h3>
+            <div class="overall">
+              <div class="ring" id="overall-ring" style="--p:0"><span id="overall-pct">0%</span></div>
+              <div class="overall-text">
+                <b id="overall-label">Pronto para iniciar</b>
+                <div class="bar"><i id="overall-bar"></i></div>
+              </div>
+            </div>
+            <ul class="phase-list" id="phase-list"></ul>
+          </div>
+          <div class="panel log-panel">
+            <h3 class="panel-title"><svg class="ic"><use href="#i-doc"/></svg>Log de atividades</h3>
+            <ol class="log" id="mini-log"></ol>
+          </div>
+          <div class="panel">
+            <h3 class="panel-title"><svg class="ic"><use href="#i-driver"/></svg>Fabricante detectado</h3>
+            <div class="vendor-mini" id="vendor-mini"><span class="skeleton">Identificando…</span></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ===== HARDWARE ===== -->
+    <section class="page" id="page-hardware">
+      <div class="page-head row">
+        <svg class="head-ic"><use href="#i-chip"/></svg>
+        <div><h1>Hardware</h1><p>Saúde do equipamento, identificação e componentes.</p></div>
+        <div class="head-actions">
+          <button class="btn ghost" id="hw-report"><svg class="ic"><use href="#i-doc"/></svg>Salvar relatório</button>
+          <button class="btn ghost" id="hw-refresh"><svg class="ic"><use href="#i-refresh"/></svg>Atualizar</button>
+        </div>
+      </div>
+
+      <div class="hw-top">
+        <div class="panel health">
+          <div class="ring big" id="health-ring" style="--p:0"><span id="health-score">—</span><small>saúde</small></div>
+          <div class="health-text">
+            <h2 id="health-title">Analisando o equipamento…</h2>
+            <p id="health-sub">Lendo processador, memória, discos e drivers.</p>
+            <ul class="health-items" id="health-items"></ul>
+          </div>
+        </div>
+        <div class="panel uptime">
+          <h3 class="panel-title"><svg class="ic"><use href="#i-clock"/></svg>Tempo ligado sem reiniciar</h3>
+          <div class="uptime-num" id="uptime">—</div>
+          <p class="muted" id="uptime-since">—</p>
+          <p class="hint" id="uptime-hint" hidden>A inicialização rápida está ativa: desligar pelo menu Iniciar não zera esse tempo. Use Reiniciar.</p>
+          <button class="btn ghost sm" id="restart-btn"><svg class="ic"><use href="#i-power"/></svg>Reiniciar agora</button>
+        </div>
+      </div>
+
+      <div class="panel ident">
+        <div class="ident-main">
+          <div class="vendor-badge" id="vendor-badge">—</div>
+          <div>
+            <h2 id="hw-model">—</h2>
+            <p class="muted" id="hw-maker">—</p>
+          </div>
+        </div>
+        <div class="tag-box">
+          <small id="tag-label">Service Tag</small>
+          <div class="tag-row"><strong class="mono" id="tag-value">—</strong>
+            <button class="icon-btn sm" id="tag-copy" title="Copiar"><svg class="ic"><use href="#i-copy"/></svg></button></div>
+          <small class="muted" id="tag-extra"></small>
+        </div>
+        <dl class="kv" id="ident-kv"></dl>
+        <button class="btn ghost sm" id="support-btn" hidden><svg class="ic"><use href="#i-link"/></svg>Página de suporte do fabricante</button>
+      </div>
+
+      <div class="hw-grid">
+        <div class="panel comp"><h3 class="panel-title"><svg class="ic"><use href="#i-cpu"/></svg>Processador</h3><div id="c-cpu"></div></div>
+        <div class="panel comp"><h3 class="panel-title"><svg class="ic"><use href="#i-board"/></svg>Placa-mãe e BIOS</h3><div id="c-board"></div></div>
+        <div class="panel comp wide"><h3 class="panel-title"><svg class="ic"><use href="#i-ram"/></svg>Memória RAM</h3><div id="c-ram"></div></div>
+        <div class="panel comp"><h3 class="panel-title"><svg class="ic"><use href="#i-audio"/></svg>Áudio</h3><div id="c-audio"></div></div>
+        <div class="panel comp"><h3 class="panel-title"><svg class="ic"><use href="#i-monitor"/></svg>Vídeo</h3><div id="c-gpu"></div></div>
+        <div class="panel comp wide"><h3 class="panel-title"><svg class="ic"><use href="#i-disk"/></svg>Armazenamento</h3><div id="c-disk"></div></div>
+        <div class="panel comp"><h3 class="panel-title"><svg class="ic"><use href="#i-wifi"/></svg>Placas de rede</h3><div id="c-nic"></div></div>
+        <div class="panel comp"><h3 class="panel-title"><svg class="ic"><use href="#i-battery"/></svg>Bateria e segurança</h3><div id="c-bat"></div></div>
+      </div>
+    </section>
+
+    <!-- ===== DRIVERS ===== -->
+    <section class="page" id="page-drivers">
+      <div class="page-head row">
+        <svg class="head-ic"><use href="#i-driver"/></svg>
+        <div><h1>Drivers</h1><p>Identifica a marca e busca os drivers certos para este modelo.</p></div>
+      </div>
+      <div class="drv-grid">
+        <div class="panel drv-detect">
+          <div class="vendor-badge xl" id="drv-vendor">—</div>
+          <div class="drv-info">
+            <h2 id="drv-model">Identificando a máquina…</h2>
+            <p class="muted" id="drv-tool">—</p>
+            <div class="drv-actions">
+              <button class="btn primary" id="drv-vendor-btn"><svg class="ic"><use href="#i-download"/></svg>Buscar drivers do fabricante</button>
+              <button class="btn ghost" id="drv-wu-btn"><svg class="ic"><use href="#i-windows"/></svg>Buscar drivers no Windows Update</button>
+            </div>
+            <label class="switch"><input type="checkbox" id="drv-bios"><i></i>Incluir BIOS e firmware</label>
+            <div class="job" id="drv-job" hidden>
+              <div class="job-top"><span class="badge run" id="drv-badge">Em andamento</span><span id="drv-text"></span></div>
+              <div class="bar"><i id="drv-bar"></i></div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <h3 class="panel-title"><svg class="ic warn"><use href="#i-alert"/></svg>Dispositivos sem driver ou com erro</h3>
+          <ul class="problems" id="problems"><li class="muted">Lendo dispositivos…</li></ul>
+        </div>
+      </div>
+      <div class="panel">
+        <h3 class="panel-title"><svg class="ic"><use href="#i-box"/></svg>Pacotes offline (pasta Recursos)</h3>
+        <p class="muted small">Instaladores que já vão junto com o programa — funcionam sem internet.</p>
+        <div class="rows" id="offline-list"></div>
+      </div>
+    </section>
+
+    <!-- ===== APLICATIVOS ===== -->
+    <section class="page" id="page-apps">
+      <div class="page-head row">
+        <svg class="head-ic"><use href="#i-grid"/></svg>
+        <div><h1>Aplicativos</h1><p>Os marcados aqui também entram na etapa "Aplicativos" do provisionamento.</p></div>
+        <div class="head-actions">
+          <button class="btn ghost" id="apps-toggle">Desmarcar todos</button>
+          <button class="btn primary" id="apps-install"><svg class="ic"><use href="#i-download"/></svg>Instalar selecionados</button>
+        </div>
+      </div>
+      <div class="app-grid" id="app-grid"></div>
+    </section>
+
+    <!-- ===== REDE ===== -->
+    <section class="page" id="page-network">
+      <div class="page-head row">
+        <svg class="head-ic"><use href="#i-wifi"/></svg>
+        <div><h1>Rede</h1><p>Conexões ativas e teste de internet.</p></div>
+        <div class="head-actions">
+          <button class="btn ghost" id="net-refresh"><svg class="ic"><use href="#i-refresh"/></svg>Atualizar</button>
+          <button class="btn primary" id="net-test"><svg class="ic"><use href="#i-play"/></svg>Testar conexão</button>
+        </div>
+      </div>
+      <div class="net-status panel" id="net-status"><span class="skeleton">Consultando a rede…</span></div>
+      <div class="net-grid" id="net-grid"></div>
+      <div class="panel"><h3 class="panel-title"><svg class="ic"><use href="#i-doc"/></svg>Diagnóstico</h3>
+        <pre class="console" id="out-net">Clique em "Testar conexão" para verificar gateway, internet, DNS e Windows Update.</pre></div>
+    </section>
+
+    <!-- ===== LIMPEZA ===== -->
+    <section class="page" id="page-cleanup">
+      <div class="page-head row">
+        <svg class="head-ic"><use href="#i-broom"/></svg>
+        <div><h1>Limpeza</h1><p>Libere espaço em disco antes de entregar a máquina.</p></div>
+      </div>
+      <div class="clean-top panel">
+        <div><small class="muted">Espaço livre em C:</small><div class="big-num" id="free-space">—</div></div>
+        <div><small class="muted">Liberado nesta sessão</small><div class="big-num ok" id="freed-space">0 B</div></div>
+        <button class="btn primary" data-clean="all"><svg class="ic"><use href="#i-broom"/></svg>Limpeza rápida completa</button>
+      </div>
+      <div class="action-grid">
+        <button class="action" data-clean="temp"><svg class="ic"><use href="#i-trash"/></svg><b>Temporários e caches</b><span>TEMP de todos os usuários, Windows\Temp, cache de entrega</span></button>
+        <button class="action" data-clean="wu"><svg class="ic"><use href="#i-windows"/></svg><b>Cache do Windows Update</b><span>Arquivos já instalados em SoftwareDistribution</span></button>
+        <button class="action" data-clean="components"><svg class="ic"><use href="#i-box"/></svg><b>Componentes antigos</b><span>DISM StartComponentCleanup — pode demorar</span></button>
+        <button class="action" data-clean="bin"><svg class="ic"><use href="#i-trash"/></svg><b>Esvaziar Lixeira</b><span>Remove definitivamente</span></button>
+        <button class="action" data-clean="analyze"><svg class="ic"><use href="#i-chart"/></svg><b>Analisar espaço por pastas</b><span>Mostra o que ocupa o disco C:</span></button>
+        <button class="action" data-clean="startup"><svg class="ic"><use href="#i-rocket"/></svg><b>Programas na inicialização</b><span>Lista o que abre com o Windows</span></button>
+      </div>
+      <div class="panel"><h3 class="panel-title"><svg class="ic"><use href="#i-doc"/></svg>Relatório</h3>
+        <pre class="console" id="out-clean">Escolha uma limpeza acima.</pre></div>
+    </section>
+
+    <!-- ===== REPARO ===== -->
+    <section class="page" id="page-repair">
+      <div class="page-head row">
+        <svg class="head-ic"><use href="#i-wrench"/></svg>
+        <div><h1>Reparo do Windows</h1><p>DISM e SFC para corrigir arquivos corrompidos do sistema. Pode passar de 1 hora.</p></div>
+        <div class="head-actions"><button class="btn primary" id="repair-run"><svg class="ic"><use href="#i-play"/></svg>Executar reparo</button></div>
+      </div>
+      <div class="rows panel" id="repair-list"></div>
+      <div class="panel"><h3 class="panel-title"><svg class="ic"><use href="#i-doc"/></svg>Saída dos comandos</h3>
+        <pre class="console tall" id="out-repair">Marque as etapas e clique em Executar reparo.</pre></div>
+    </section>
+
+    <!-- ===== TEMPERATURA ===== -->
+    <section class="page" id="page-temps">
+      <div class="page-head row">
+        <svg class="head-ic"><use href="#i-thermo"/></svg>
+        <div><h1>Temperatura</h1><p id="temp-status">Sensores em tempo real — atualiza a cada 2 segundos.</p></div>
+      </div>
+      <div class="gauge-grid" id="gauges"></div>
+      <div class="two">
+        <div class="panel"><h3 class="panel-title"><svg class="ic"><use href="#i-disk"/></svg>Discos</h3><div id="t-disks" class="muted">—</div></div>
+        <div class="panel"><h3 class="panel-title"><svg class="ic"><use href="#i-fan"/></svg>Ventoinhas</h3><div id="t-fans" class="muted">—</div></div>
+      </div>
+    </section>
+
+    <!-- ===== LOGS ===== -->
+    <section class="page" id="page-logs">
+      <div class="page-head row">
+        <svg class="head-ic"><use href="#i-doc"/></svg>
+        <div><h1>Logs</h1><p id="log-path">Tudo que o programa faz fica registrado aqui e em arquivo.</p></div>
+        <div class="head-actions">
+          <button class="btn ghost" id="log-open"><svg class="ic"><use href="#i-folder"/></svg>Abrir pasta de logs</button>
+          <button class="btn ghost" id="log-clear">Limpar tela</button>
+        </div>
+      </div>
+      <div class="panel"><ol class="log full" id="full-log"></ol></div>
+    </section>
+  </main>
+</div>
+
+<!-- aviso de reinicialização -->
+<div class="countdown" id="countdown" hidden>
+  <svg class="ic"><use href="#i-power"/></svg>
+  <div><b id="cd-msg">Reiniciando</b><span>em <em id="cd-s">20</em> s — o programa abre sozinho e continua.</span></div>
+  <button class="btn ghost sm" id="cd-cancel">Cancelar reinicialização</button>
+</div>
+
+<div class="update-bar" id="update-bar" hidden>
+  <svg class="ic"><use href="#i-download"/></svg>
+  <div class="ub-text"><b id="ub-title">Nova versão disponível</b><span id="ub-sub"></span>
+    <div class="bar" id="ub-bar" hidden><i id="ub-fill"></i></div></div>
+  <button class="btn ghost sm" id="ub-later">Depois</button>
+  <button class="btn primary sm" id="ub-now">Atualizar agora</button>
+</div>
+
+<dialog id="modal">
+  <h2 id="modal-title">Reiniciar agora?</h2>
+  <p id="modal-text"></p>
+  <div class="modal-actions">
+    <button class="btn ghost" id="modal-no">Depois</button>
+    <button class="btn primary" id="modal-yes">Reiniciar agora</button>
+  </div>
+</dialog>
+
+<div class="toast" id="toast" hidden></div>
+
+<!-- ================= ícones ================= -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="brand-g" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#2A6BFF"/><stop offset="1" stop-color="#A6E22E"/></linearGradient>
+  </defs>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></symbol>
+  <symbol id="i-windows" viewBox="0 0 24 24"><path d="M4 5.5 11 4.5v7H4zM13 4.2 20 3v8.5h-7zM4 12.5h7v7l-7-1zM13 12.5h7V21l-7-1z"/></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></symbol>
+  <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M5 15c-1.5 1.5-2 5-2 5s3.5-.5 5-2M9 15l-2-2c1-4 4-9 12-10-1 8-6 11-10 12zM14 7.5a1.5 1.5 0 1 0 3 0 1.5 1.5 0 0 0-3 0"/></symbol>
+  <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 9h6v6H9zM9 1.5v3.5M15 1.5v3.5M9 19v3.5M15 19v3.5M1.5 9H5M1.5 15H5M19 9h3.5M19 15h3.5"/></symbol>
+  <symbol id="i-driver" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20M12 7v6M9.5 10.5 12 13l2.5-2.5"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></symbol>
+  <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2 8.5a15 15 0 0 1 20 0M5.5 12a10 10 0 0 1 13 0M9 15.5a5 5 0 0 1 6 0"/><circle cx="12" cy="19" r="1"/></symbol>
+  <symbol id="i-broom" viewBox="0 0 24 24"><path d="M14 3 9.5 11.5M6 12h8l2 9H4z M8 16v5M12 16v5"/></symbol>
+  <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.5 6.5a4 4 0 0 0 5 5L21 13l-8 8-3-3 1.5-1.5a4 4 0 0 0-5-5L3 10l3-3 3 3 2.5-2.5z"/></symbol>
+  <symbol id="i-thermo" viewBox="0 0 24 24"><path d="M10 14V5a2 2 0 1 1 4 0v9a4 4 0 1 1-4 0z"/><path d="M12 9v7"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 2h9l4 4v16H6z"/><path d="M9 11h7M9 15h7M9 7h3"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1M18.7 18.7l-2.1-2.1M7.4 7.4 5.3 5.3"/><circle cx="12" cy="12" r="7"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.5-4.5L4 8M4 4v4h4M4 13a8 8 0 0 0 14.5 4.5L20 16M20 20v-4h-4"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 2.5 4 5.5v6c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10v-6z"/><path d="m8.5 12 2.5 2.5 4.5-5"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v8M6.5 6.5a8 8 0 1 0 11 0"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1"/></symbol>
+  <symbol id="i-board" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="7" y="7" width="5" height="5"/><path d="M15 7h2M15 10h2M7 16h10M14 13v6"/></symbol>
+  <symbol id="i-ram" viewBox="0 0 24 24"><path d="M2 7h20v9H2z"/><path d="M6 10v3M10 10v3M14 10v3M18 10v3M5 16v3M19 16v3"/></symbol>
+  <symbol id="i-audio" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a8 8 0 0 1 0 11"/></symbol>
+  <symbol id="i-disk" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+  <symbol id="i-battery" viewBox="0 0 24 24"><rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 10.5v3M5.5 10v4M9 10v4"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17v.5"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="m3 7.5 9 4.5 9-4.5M12 12v9"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 20h16"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
+  <symbol id="i-fan" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M12 10c-1-4 1-7 3.5-7 2 0 2.5 3-3.5 7zM14 12c4-1 7 1 7 3.5 0 2-3 2.5-7-3.5zM12 14c1 4-1 7-3.5 7-2 0-2.5-3 3.5-7zM10 12c-4 1-7-1-7-3.5 0-2 3-2.5 7 3.5z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 10.5v3"/><path d="m11.5 8.5-3 4h3l-2 3.5"/><path d="M3 20 20 4" class="slash"/></symbol>
+  <symbol id="i-office" viewBox="0 0 24 24"><path d="M4 6.5 14 3l6 2v14l-6 2-10-3.5L14 19V6z"/></symbol>
+  <symbol id="i-update" viewBox="0 0 24 24"><path d="M4 5.5 11 4.5v7H4zM13 4.2 20 3v8.5h-7zM4 12.5h7v7l-7-1z"/><path d="M14 17a3.5 3.5 0 0 0 6 1.5M20 15.5v3h-3"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4M5 4h13l-2.5 4L18 12H5"/></symbol>
+  <symbol id="i-laptop" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="10" rx="1.5"/><path d="M2 19h20l-2-4H4z"/></symbol>
+</svg>
+
+<script src="app.js"></script>
+</body>
+</html>
