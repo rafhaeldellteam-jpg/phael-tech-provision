@@ -687,9 +687,14 @@
     api.update_check().then((u) => {
       U.info = u;
       if (!u.available) {
-        if (manual) toast(u.error ? u.error : `Você está na versão mais recente (v${S.boot.version}).`);
+        if (manual) {
+          if (u.error) showUpdate("Não foi possível verificar", u.error);
+          else showUpdate("Programa atualizado", `Você já está na versão mais recente (v${S.boot.version}).`);
+          $("#ub-now").hidden = true; $("#ub-later").hidden = false; $("#ub-later").textContent = "Fechar";
+        }
         return;
       }
+      $("#ub-later").textContent = "Depois";
       if (!u.can_install) { showUpdate(`Versão ${u.version} disponível`, "Baixe o .exe novo na página de releases do GitHub."); $("#ub-now").hidden = true; return; }
       if (u.busy || S.busy) {
         showUpdate(`Versão ${u.version} disponível`, "Será instalada quando você clicar em Atualizar agora (há uma tarefa em andamento).");
@@ -707,9 +712,15 @@
   }
   $("#ub-now").addEventListener("click", installUpdate);
   $("#ub-later").addEventListener("click", () => { clearInterval(U.timer); $("#update-bar").hidden = true; });
-  $("#version").addEventListener("click", () => checkUpdates(true));
+  $("#version").addEventListener("click", () => {
+    showUpdate("Procurando atualização…", "Consultando a última versão publicada no GitHub.", { buttons: false });
+    checkUpdates(true);
+  });
   function onUpdateEvent(ev) {
-    if (ev.status === "download") showUpdate("Baixando atualização…", Math.round(ev.pct) + "%", { buttons: false, progress: ev.pct });
+    if (ev.status === "download") {
+      showUpdate("Baixando atualização…", ev.pct < 0 ? "Baixando pelo proxy do Windows…" : Math.round(ev.pct) + "%", { buttons: false, progress: Math.max(0, ev.pct) });
+      if (ev.pct < 0) $("#ub-bar").classList.add("indet"); else $("#ub-bar").classList.remove("indet");
+    }
     else if (ev.status === "restart") showUpdate("Atualização pronta", "Reiniciando o programa na versão nova…", { buttons: false, progress: 100 });
     else if (ev.status === "error") { showUpdate("Falha na atualização", ev.msg); $("#ub-now").hidden = true; $("#ub-later").hidden = false; }
   }

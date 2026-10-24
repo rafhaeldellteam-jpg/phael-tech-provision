@@ -77,7 +77,8 @@ DCU_CODES = {0: "Atualizações aplicadas", 1: "Reinicialização necessária", 
              500: "Nenhuma atualização disponível", 2: "Erro desconhecido", 3: "Erro ao aplicar",
              4: "Sistema não suportado pelo DCU", 7: "Precisa de privilégio de administrador",
              8: "Plataforma não suportada", 1000: "Erro ao obter o resultado", 1001: "Cancelado",
-             3000: "Serviço do DCU não está rodando", 3005: "Serviço do DCU desativado"}
+             3000: "Serviço do DCU não está rodando", 3005: "Serviço do DCU desativado",
+             106: "Parâmetro inválido", 107: "Pasta de log não permitida pelo DCU"}
 
 
 def _dcu_cli() -> str | None:
@@ -114,7 +115,6 @@ def dell_update(progress: Progress, cancel: threading.Event, include_bios: bool 
     if not cli:
         raise RuntimeError("Dell Command | Update não encontrado e não foi possível instalar. Coloque o instalador "
                            "do DCU na pasta Recursos\\Drivers Dell ou conecte a internet.")
-    logs = sub_work_dir("logs")
     run([cli, "/configure", "-userConsent=disable", "-scheduleManual", "-autoSuspendBitLocker=enable"], timeout=120)
     types = "driver,application,others" + (",bios,firmware" if include_bios else "")
     progress(5, "Dell Command | Update: procurando drivers para este modelo…")
@@ -129,8 +129,10 @@ def dell_update(progress: Progress, cancel: threading.Event, include_bios: bool 
         else:
             log("  DCU: " + s)
 
-    rc = stream_cmd([cli, "/applyUpdates", "-silent", "-reboot=disable", f"-updateType={types}",
-                     f"-outputLog={logs / 'dell-dcu.log'}"], on_line, timeout=3 * 3600, cancel=cancel)
+    # sem -outputLog: o DCU 5 recusa pastas como o ProgramData ("reserved folder", código 107);
+    # a saída já vai inteira para o log do programa
+    rc = stream_cmd([cli, "/applyUpdates", "-silent", "-reboot=disable", f"-updateType={types}"],
+                    on_line, timeout=3 * 3600, cancel=cancel)
     msg = DCU_CODES.get(rc, f"código {rc}")
     if rc in (0, 500):
         progress(100, msg)

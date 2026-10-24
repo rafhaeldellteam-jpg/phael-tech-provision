@@ -428,7 +428,7 @@ class Api:
                 last = [-10.0]
 
                 def prog(p):
-                    if p - last[0] >= 2 or p >= 100:
+                    if p < 0 or p - last[0] >= 2 or p >= 100:
                         last[0] = p
                         self._emit({"t": "upd", "status": "download", "pct": p})
                 path = updater.download(info, prog)
