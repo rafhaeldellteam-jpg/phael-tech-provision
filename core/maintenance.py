@@ -247,7 +247,7 @@ $outFile = __OUT_FILE__
 while ($true) {
     $cpuT = @(); $cpuL = $null; $gpuT = @(); $gpuL = $null; $memL = $null; $boardT = @()
     $disks = New-Object System.Collections.ArrayList; $fans = New-Object System.Collections.ArrayList
-    $cpuP = $null
+    $cpuP = $null; $diskMax = @{}; $fanSeen = @{}
     $stack = New-Object System.Collections.Stack
     foreach ($h in $comp.Hardware) { $stack.Push($h) }
     while ($stack.Count -gt 0) {
@@ -259,23 +259,31 @@ while ($true) {
             if ($st -eq 'Temperature') {
                 if ($type -match 'Cpu') { if ($s.Name -notmatch 'Distance') { $cpuT += $v } }
                 elseif ($type -match 'Gpu') { $gpuT += $v }
-                elseif ($type -match 'Storage|Hdd|Ssd') { [void]$disks.Add(@{ n = $hw.Name; t = [math]::Round($v, 0) }) }
+                elseif ($type -match 'Storage|Hdd|Ssd') {
+                    # um SSD NVMe expõe vários sensores (Composite, Temperature 1, 2...): guarda só o maior por disco
+                    $key = [string]$hw.Identifier
+                    if (-not $diskMax.ContainsKey($key) -or $v -gt $diskMax[$key].t) { $diskMax[$key] = @{ n = $hw.Name; t = [math]::Round($v, 0) } }
+                }
                 elseif ($type -match 'Motherboard|SuperIO|EmbeddedController') { $boardT += $v }
             } elseif ($st -eq 'Load') {
                 if ($type -match 'Cpu' -and $s.Name -eq 'CPU Total') { $cpuL = [math]::Round($v, 0) }
                 elseif ($type -match 'Gpu' -and $s.Name -match 'Core|D3D 3D') { if ($null -eq $gpuL -or $v -gt $gpuL) { $gpuL = [math]::Round($v, 0) } }
                 elseif ($type -match 'Memory' -and $s.Name -eq 'Memory') { $memL = [math]::Round($v, 0) }
             } elseif ($st -eq 'Power' -and $type -match 'Cpu' -and $s.Name -match 'Package') { $cpuP = [math]::Round($v, 1) }
-            elseif ($st -eq 'Fan' -and $v -gt 0) { [void]$fans.Add(@{ n = $s.Name; r = [math]::Round($v, 0) }) }
+            elseif ($st -eq 'Fan' -and $v -gt 0) {
+                $fk = [string]$hw.Identifier + '|' + $s.Name
+                if (-not $fanSeen.ContainsKey($fk)) { $fanSeen[$fk] = $true; [void]$fans.Add(@{ n = $s.Name; r = [math]::Round($v, 0) }) }
+            }
         }
         foreach ($sub in $hw.SubHardware) { $stack.Push($sub) }
     }
+    foreach ($d in $diskMax.Values) { [void]$disks.Add($d) }
     $cpuTemp = if ($cpuT.Count) { [math]::Round(($cpuT | Measure-Object -Maximum).Maximum, 0) } else { $null }
     $gpuTemp = if ($gpuT.Count) { [math]::Round(($gpuT | Measure-Object -Maximum).Maximum, 0) } else { $null }
     $boardTemp = if ($boardT.Count) { [math]::Round(($boardT | Measure-Object -Maximum).Maximum, 0) } else { $null }
     # alternativas quando o LHM não acessa o sensor (fallbacks APLICADOS antes de montar a saída)
     if ($disks.Count -eq 0) {
-        try { Get-PhysicalDisk | ForEach-Object { $rc = $_ | Get-StorageReliabilityCounter; if ($rc.Temperature -gt 0) { [void]$disks.Add(@{ n = $_.FriendlyName; t = [int]$rc.Temperature }) } } } catch {}
+        try { Get-PhysicalDisk | Sort-Object DeviceId -Unique | ForEach-Object { $rc = $_ | Get-StorageReliabilityCounter; if ($rc.Temperature -gt 0) { [void]$disks.Add(@{ n = $_.FriendlyName; t = [int]$rc.Temperature }) } } } catch {}
     }
     if ($null -eq $cpuTemp) {
         try {
@@ -318,9 +326,21 @@ class SensorReader:
             self.error = "Leitura de sensores encerrada."
             return None
         try:
-            return json.loads(self.out.read_text(encoding="utf-8"))
+            data = json.loads(self.out.read_text(encoding="utf-8"))
         except Exception:
             return None
+        # garantia extra contra duplicados: um item por disco/ventoinha (maior leitura)
+        for key, val in (("disks", "t"), ("fans", "r")):
+            items = data.get(key) or []
+            if isinstance(items, dict):
+                items = [items]
+            best: dict = {}
+            for it in items:
+                n = str(it.get("n", "")).strip()
+                if n and (n not in best or (it.get(val) or 0) > (best[n].get(val) or 0)):
+                    best[n] = it
+            data[key] = list(best.values())
+        return data
 
     def stop(self) -> None:
         if self.proc and self.proc.poll() is None:

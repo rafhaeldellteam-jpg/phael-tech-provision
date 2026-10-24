@@ -484,11 +484,26 @@ def _ensure_webview2() -> None:
         run([str(setup), "/silent", "/install"], timeout=900)
 
 
+_INSTANCE_MUTEX = None
+
+
+def _already_running() -> bool:
+    """Evita duas janelas do programa ao mesmo tempo (ex.: reabertura automática + clique do usuário)."""
+    global _INSTANCE_MUTEX
+    if not IS_WIN:
+        return False
+    _INSTANCE_MUTEX = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\PhaelTechProvision")
+    return ctypes.windll.kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+
+
 def main() -> None:
     if IS_WIN and not is_admin():
         if relaunch_as_admin():
             return
         _message_box("Execute o Phael Tech Provision como administrador.")
+        return
+    if _already_running():
+        _message_box("O Phael Tech Provision já está aberto nesta máquina.")
         return
     try:
         import webview

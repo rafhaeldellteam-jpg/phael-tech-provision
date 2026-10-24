@@ -65,7 +65,7 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
 body {
   background: var(--bg);
   color: var(--text);
@@ -94,7 +94,8 @@ p { margin: 0; }
 
 /* =================================================================== estrutura */
 .shell {
-  height: 100vh;
+  position: fixed;
+  inset: 0;
   display: grid;
   grid-template-columns: 248px 1fr;
   grid-template-rows: auto 1fr;
@@ -261,8 +262,9 @@ p { margin: 0; }
 @property --p { syntax: "<number>"; inherits: true; initial-value: 0; }
 
 /* ---------- interruptor ---------- */
-.switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; color: var(--muted); }
-.switch input { position: absolute; opacity: 0; pointer-events: none; }
+.switch { position: relative; display: inline-flex; align-items: center; gap: 10px; cursor: pointer; color: var(--muted); }
+/* input escondido DENTRO do rótulo: se ficasse solto, o navegador rolava a página inteira ao focar nele */
+.switch input { position: absolute; left: 0; top: 0; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
 .switch i { width: 36px; height: 20px; border-radius: 99px; background: var(--track); border: 1px solid var(--line-2); position: relative; flex: none; transition: background .2s; }
 .switch i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: transform .2s, background .2s; }
 .switch input:checked + i { background: var(--accent); border-color: var(--accent); }

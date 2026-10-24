@@ -100,6 +100,7 @@
     st.status = status;
     if (pct >= 0) st.pct = pct;
     const row = $(`.task[data-key="${key}"]`);
+    if (!row) return;
     row.className = `task st-${status}` + ($("input", row).checked ? "" : " off");
     const box = $(".st", row);
     box.className = `st st-${status}`;
@@ -229,7 +230,7 @@
       case "upd": onUpdateEvent(ev); break;
     }
   }
-  window.PT = { onEvents: (list) => list.forEach(onEvent) };
+  window.PT = { onEvents: (list) => list.forEach((ev) => { try { onEvent(ev); } catch (e) { console.error(e); } }) };
 
   function countdown(ev) {
     const box = $("#countdown");
