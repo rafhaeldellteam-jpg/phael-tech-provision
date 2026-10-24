@@ -1,14 +1,12 @@
 # Gera o "Phael Tech Provision.exe" no Windows e anexa à release.
 # Como publicar uma versão (qualquer uma das duas):
 #   - enviar uma tag:  git tag v2.0.1 && git push origin v2.0.1
-#   - ou no site: Releases -> "Draft a new release" -> tag v2.0.1 -> Publish
+#   - ou no site: Releases -> "Draft a new release" -> tag v2.0.1 -> Publish (o site cria a tag e dispara o build)
 name: Publicar versão
 
 on:
   push:
     tags: ["v*"]
-  release:
-    types: [published]
 
 permissions:
   contents: write
