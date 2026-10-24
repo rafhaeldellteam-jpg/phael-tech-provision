@@ -3,6 +3,13 @@ import pathlib
 import re
 import sys
 
+if sys.argv[1] == "--thumbprint":
+    root = pathlib.Path(__file__).resolve().parent.parent
+    p = root / "core" / "version.py"
+    p.write_text(re.sub(r'SIGN_THUMBPRINT = "[^"]*"', f'SIGN_THUMBPRINT = "{sys.argv[2].upper()}"',
+                        p.read_text(encoding="utf-8")), encoding="utf-8")
+    print("thumbprint", sys.argv[2])
+    sys.exit(0)
 v = sys.argv[1].lstrip("vV")
 nums = [int(x) for x in (v.split(".") + ["0", "0", "0"])[:3]]
 root = pathlib.Path(__file__).resolve().parent.parent

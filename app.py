@@ -17,7 +17,7 @@ import traceback
 import webbrowser
 from pathlib import Path
 
-from core import drivers, maintenance, programs, provision, sysinfo, updater
+from core import driverpacks, drivers, maintenance, programs, provision, seal, sysinfo, updater
 from core.provision import NeedsReboot
 from core.util import (APP_NAME, APP_VERSION, IS_WIN, bundle_dir, find_resource, fmt_bytes, is_admin, log,
                        relaunch_as_admin, run, work_dir)
@@ -249,7 +249,13 @@ class Api:
         inv = self.inventory()
         vendor = (inv or {}).get("vendor", "other")
         if key == "power":
-            return provision.disable_fast_startup(prog, opts.get("power_button", True), opts.get("no_sleep", True))
+            msg = provision.disable_fast_startup(prog, opts.get("power_button", True), opts.get("no_sleep", True))
+            if opts.get("trust_cert"):
+                try:
+                    provision.trust_certificate()
+                except Exception as e:
+                    log(f"Certificado: {e}", "warn")
+            return msg
         if key == "office":
             return provision.install_office(prog, self._cancel)
         if key == "wu":
@@ -258,7 +264,7 @@ class Api:
             # se o Windows Update fez parte do provisionamento, os drivers do catálogo Microsoft já entraram
             wu_together = "wu" in opts.get("_parallel", [])
             return drivers.vendor_drivers(vendor, prog, self._cancel, opts.get("include_bios", False),
-                                          wu_fallback=not wu_together)
+                                          wu_fallback=not wu_together, inv=inv)
         if key == "finalize":
             self._inventory = None
             return provision.finalize(prog, self.inventory())
@@ -353,7 +359,8 @@ class Api:
             try:
                 self._emit({"t": "drv", "mode": mode, "status": "run", "pct": -1, "text": "Iniciando…"})
                 if mode == "vendor":
-                    msg = drivers.vendor_drivers(self.inventory().get("vendor", "other"), cb, self._cancel, include_bios)
+                    inv = self.inventory()
+                    msg = drivers.vendor_drivers(inv.get("vendor", "other"), cb, self._cancel, include_bios, inv=inv)
                 elif mode == "wu":
                     msg = drivers.windows_update_drivers(cb, self._cancel)
                 else:
@@ -449,6 +456,68 @@ class Api:
         threading.Thread(target=worker, daemon=True).start()
         return {"ok": True}
 
+    # ------------------------------------------------------------------ pacotes offline por modelo
+    def pack_status(self) -> dict:
+        inv = self.inventory()
+        if inv.get("error"):
+            return {"error": inv["error"]}
+        return driverpacks.local_status(inv)
+
+    def pack_run(self, mode: str) -> dict:
+        """mode: 'download' (baixar para a pasta ao lado do .exe) | 'install' (instalar do pendrive)."""
+        if not self._busy.acquire(blocking=False):
+            return {"ok": False, "msg": "Já existe uma tarefa em andamento."}
+        self._cancel.clear()
+
+        def cb(pct, text):
+            self._emit({"t": "pack", "status": "run", "pct": pct, "text": text})
+
+        def worker():
+            try:
+                inv = self.inventory()
+                fn = driverpacks.download_pack if mode == "download" else driverpacks.install_pack
+                msg = fn(inv, cb, self._cancel)
+                self._emit({"t": "pack", "status": "ok", "pct": 100, "text": msg})
+            except Exception as e:
+                log(f"Pacote por modelo: {e}", "error")
+                self._emit({"t": "pack", "status": "err", "pct": 0, "text": str(e)[:200]})
+            finally:
+                self._busy.release()
+                self._emit({"t": "pack_done"})
+        threading.Thread(target=worker, daemon=True).start()
+        return {"ok": True}
+
+    # ------------------------------------------------------------------ finalizar e selar
+    def seal_check(self) -> dict:
+        try:
+            return seal.precheck()
+        except Exception as e:
+            return {"items": [], "error": str(e)}
+
+    def seal_fix_appx(self) -> dict:
+        def worker():
+            seal.remove_user_appx(lambda l: self._emit({"t": "out", "ch": "seal", "line": l}))
+            self._emit({"t": "seal_checked"})
+        threading.Thread(target=worker, daemon=True).start()
+        return {"ok": True}
+
+    def seal_run(self, generalize: bool, action: str) -> dict:
+        if not self._busy.acquire(blocking=False):
+            return {"ok": False, "msg": "Aguarde a tarefa atual terminar."}
+        action = "reboot" if action == "reboot" else "shutdown"
+
+        def worker():
+            try:
+                seal.seal(bool(generalize), action, self.inventory(),
+                          lambda l: self._emit({"t": "out", "ch": "seal", "line": l}))
+            except Exception as e:
+                log(f"Finalizar e selar: {e}", "error")
+                self._emit({"t": "seal_err", "msg": str(e)})
+            finally:
+                self._busy.release()
+        threading.Thread(target=worker, daemon=True).start()
+        return {"ok": True}
+
     # ------------------------------------------------------------------ atualização (GitHub)
     def update_check(self) -> dict:
         info = updater.check()
@@ -481,8 +550,11 @@ class Api:
                 time.sleep(1.5)
                 self._sensors.stop()
                 _release_instance()                   # libera a trava para a versão nova abrir
-                updater.launch(target)
-                os._exit(0)                           # fecha na hora, sem esperar a janela
+                updater.launch(target)                # a nova espera esta fechar por completo
+                closer = threading.Thread(target=lambda: self._window and self._window.destroy(), daemon=True)
+                closer.start()
+                closer.join(4)                        # fecha a janela (e o WebView2) se der; senão força
+                os._exit(0)
             except Exception as e:
                 log(f"Falha na atualização: {e}", "error")
                 self._emit({"t": "upd", "status": "error", "msg": str(e)})
@@ -553,6 +625,7 @@ def main() -> None:
             return
         _message_box("Execute o Phael Tech Provision como administrador.")
         return
+    updater.wait_previous_instance(sys.argv, work_dir() / "webview")
     if _already_running():
         # logo após uma atualização a versão antiga pode levar alguns segundos para sair
         for _ in range(20):

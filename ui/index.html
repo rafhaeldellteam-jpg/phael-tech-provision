@@ -45,6 +45,7 @@
     <button data-page="cleanup"><svg class="ic"><use href="#i-broom"/></svg>Limpeza</button>
     <button data-page="repair"><svg class="ic"><use href="#i-wrench"/></svg>Reparo do Windows</button>
     <button data-page="temps"><svg class="ic"><use href="#i-thermo"/></svg>Temperatura</button>
+    <button data-page="seal"><svg class="ic"><use href="#i-shield"/></svg>Finalizar e selar</button>
     <button data-page="logs"><svg class="ic"><use href="#i-doc"/></svg>Logs</button>
     <div class="side-foot">
       <img src="assets/logo.png" alt="">
@@ -85,6 +86,7 @@
             <label class="switch"><input type="checkbox" id="opt-autoreboot" checked><i></i>Reiniciar sozinho quando uma atualização pedir (o programa reabre e continua)</label>
             <label class="switch"><input type="checkbox" id="opt-bios"><i></i>Incluir atualizações de BIOS e firmware do fabricante</label>
             <label class="switch"><input type="checkbox" id="opt-endreboot"><i></i>Reiniciar ao final do provisionamento</label>
+            <label class="switch"><input type="checkbox" id="opt-trust"><i></i>Confiar no certificado digital da Phael Tech nesta máquina</label>
           </div>
 
           <div class="prov-foot">
@@ -209,6 +211,23 @@
           <ul class="problems" id="problems"><li class="muted">Lendo dispositivos…</li></ul>
         </div>
       </div>
+      <div class="panel pack-panel">
+        <h3 class="panel-title"><svg class="ic"><use href="#i-disk"/></svg>Pacote completo do modelo (offline)</h3>
+        <div class="pack-body">
+          <div class="pack-info">
+            <p class="muted small">Baixe uma vez o pacote oficial de drivers deste modelo numa máquina com internet. Ele fica na pasta <b>Drivers por modelo</b>, ao lado do programa (ex.: no pendrive). Nas outras máquinas do mesmo modelo, mesmo sem internet, os drivers são instalados dali. No provisionamento, o pacote entra sozinho na etapa de drivers do fabricante.</p>
+            <dl class="kv" id="pack-kv"></dl>
+          </div>
+          <div class="pack-actions">
+            <button class="btn primary" id="pack-install"><svg class="ic"><use href="#i-download"/></svg>Instalar pacote do modelo</button>
+            <button class="btn ghost" id="pack-download"><svg class="ic"><use href="#i-download"/></svg>Baixar pacote deste modelo</button>
+          </div>
+        </div>
+        <div class="job" id="pack-job" hidden>
+          <div class="job-top"><span class="badge run" id="pack-badge">Em andamento</span><span id="pack-text"></span></div>
+          <div class="bar"><i id="pack-bar"></i></div>
+        </div>
+      </div>
       <div class="panel">
         <h3 class="panel-title"><svg class="ic"><use href="#i-box"/></svg>Pacotes offline (pasta Recursos)</h3>
         <p class="muted small">Instaladores que já vão junto com o programa — funcionam sem internet.</p>
@@ -294,6 +313,34 @@
     </section>
 
     <!-- ===== LOGS ===== -->
+    <section class="page" id="page-seal">
+      <div class="page-head row">
+        <svg class="head-ic"><use href="#i-shield"/></svg>
+        <div><h1>Finalizar e selar</h1><p>Sai do modo de auditoria e entrega a máquina como nova: no próximo ligar, o colaborador cria a conta dele.</p></div>
+        <div class="head-actions"><button class="btn ghost" id="seal-recheck"><svg class="ic"><use href="#i-refresh"/></svg>Verificar de novo</button></div>
+      </div>
+      <div class="seal-grid">
+        <div class="panel">
+          <h3 class="panel-title"><svg class="ic"><use href="#i-check-circle"/></svg>Antes de selar</h3>
+          <ul class="health-items seal-items" id="seal-items"><li class="muted">Verificando…</li></ul>
+          <button class="btn ghost sm" id="seal-fix-appx" hidden>Remover apps da Store que travam o Sysprep</button>
+        </div>
+        <div class="panel seal-opts">
+          <h3 class="panel-title"><svg class="ic"><use href="#i-gear"/></svg>Como selar</h3>
+          <label class="switch"><input type="checkbox" id="seal-generalize"><i></i>Generalizar (só para gerar imagem e copiar para outras máquinas)</label>
+          <p class="hint" id="seal-gen-hint" hidden>Generalizar apaga drivers e o identificador desta instalação. Para entregar este notebook ao colaborador, deixe desligado.</p>
+          <div class="seg">
+            <label><input type="radio" name="seal-action" value="shutdown" checked><span>Desligar ao terminar</span></label>
+            <label><input type="radio" name="seal-action" value="reboot"><span>Reiniciar ao terminar</span></label>
+          </div>
+          <button class="btn danger big" id="seal-run"><svg class="ic"><use href="#i-shield"/></svg>Finalizar e selar a máquina</button>
+          <p class="muted small">O relatório da máquina é salvo antes, e o programa deixa de reabrir sozinho.</p>
+        </div>
+      </div>
+      <div class="panel"><h3 class="panel-title"><svg class="ic"><use href="#i-doc"/></svg>Andamento</h3>
+        <pre class="console" id="out-seal">Confira os itens acima e clique em Finalizar e selar.</pre></div>
+    </section>
+
     <section class="page" id="page-logs">
       <div class="page-head row">
         <svg class="head-ic"><use href="#i-doc"/></svg>

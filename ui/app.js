@@ -60,6 +60,8 @@
     if (page === "network" && !S.netLoaded) loadNetwork();
     if (page === "cleanup") api.free_space().then((v) => ($("#free-space").textContent = v));
     if (page === "apps") refreshAppStatus();
+    if (page === "drivers") loadPack();
+    if (page === "seal") loadSeal();
   }
   $$("#nav > button").forEach((b) => b.addEventListener("click", () => go(b.dataset.page)));
   $$("[data-goto]").forEach((b) => b.addEventListener("click", () => go(b.dataset.goto)));
@@ -177,6 +179,7 @@
       steps, apps: [...S.appsSel],
       include_bios: $("#opt-bios").checked, auto_reboot: $("#opt-autoreboot").checked,
       reboot_end: $("#opt-endreboot").checked, power_button: true, no_sleep: true,
+      trust_cert: $("#opt-trust").checked,
     };
     api.start_provision(opts).then((r) => {
       if (!r.ok) return toast(r.msg);
@@ -226,6 +229,10 @@
       case "reboot_prompt": showModal("Reiniciar agora?", ev.msg + "\n\nO programa abre sozinho depois e continua de onde parou."); break;
       case "countdown": countdown(ev); break;
       case "upd": onUpdateEvent(ev); break;
+      case "pack": setPack(ev); break;
+      case "pack_done": setBusy(false); loadPack(); break;
+      case "seal_checked": loadSeal(); break;
+      case "seal_err": $("#seal-run").disabled = false; outLine("seal", "✘ " + ev.msg); showModal("O Sysprep não selou a máquina", ev.msg, () => {}, "Entendi"); break;
     }
   }
   window.PT = { onEvents: (list) => list.forEach((ev) => { try { onEvent(ev); } catch (e) { console.error(e); } }) };
@@ -239,14 +246,17 @@
   }
   $("#cd-cancel").addEventListener("click", () => api.cancel_reboot());
 
-  function showModal(title, text) {
+  let modalYes = null;
+  function showModal(title, text, onYes = () => api.reboot_now(), yesLabel = "Reiniciar agora") {
     $("#modal-title").textContent = title;
     $("#modal-text").textContent = text;
+    $("#modal-yes").textContent = yesLabel;
+    modalYes = onYes;
     const d = $("#modal");
     if (!d.open) d.showModal();
   }
   $("#modal-no").addEventListener("click", () => $("#modal").close());
-  $("#modal-yes").addEventListener("click", () => { $("#modal").close(); api.reboot_now(); });
+  $("#modal-yes").addEventListener("click", () => { $("#modal").close(); if (modalYes) modalYes(); });
 
   /* ------------------------------------------------------------------ hardware */
   function fmtUptime(sec) {
@@ -727,6 +737,72 @@
     else if (ev.status === "restart") showUpdate("Atualização pronta", "Reiniciando o programa na versão nova…", { buttons: false, progress: 100 });
     else if (ev.status === "error") { showUpdate("Falha na atualização", ev.msg); $("#ub-now").hidden = true; $("#ub-later").hidden = false; }
   }
+
+
+  /* ------------------------------------------------------------------ pacote completo por modelo */
+  const fmtBig = (b) => (b >= 1e9 ? (b / 1e9).toFixed(1).replace(".", ",") + " GB" : Math.round(b / 1e6) + " MB");
+  function loadPack() {
+    api.pack_status().then((p) => {
+      if (!p || p.error) { $("#pack-kv").innerHTML = kv([["Situação", p?.error || "Indisponível"]]); return; }
+      $("#pack-kv").innerHTML = kv([
+        ["Código do modelo", p.model_id || "não identificado"],
+        ["Situação", p.available ? `Pacote pronto: ${p.drivers} drivers (${fmtBig(p.size)})` : "Nenhum pacote salvo para este modelo"],
+        ["Pasta", p.path], ["Pacote", (p.info || "").split("\n")[0]],
+      ]);
+      $("#pack-install").disabled = !p.available || S.busy;
+      $("#pack-download").disabled = !p.downloadable || S.busy;
+      $("#pack-download").title = p.downloadable ? "" : "Este fabricante não publica pacotes: copie os drivers para a pasta manualmente.";
+    }).catch(() => {});
+  }
+  function setPack(ev) {
+    $("#pack-job").hidden = false;
+    const b = $("#pack-badge");
+    b.className = "badge " + ev.status;
+    b.textContent = STATUS_TXT[ev.status];
+    $("#pack-text").textContent = ev.text || "";
+    const bar = $("#pack-bar");
+    bar.parentElement.className = "bar" + (ev.pct < 0 ? " indet" : ev.status === "err" ? " bad" : "");
+    bar.style.width = Math.max(0, ev.pct) + "%";
+  }
+  function runPack(mode) {
+    api.pack_run(mode).then((r) => {
+      if (!r.ok) return toast(r.msg);
+      setBusy(true);
+      $("#pack-install").disabled = $("#pack-download").disabled = true;
+      setPack({ status: "run", pct: -1, text: mode === "download" ? "Consultando o catálogo do fabricante…" : "Preparando…" });
+    });
+  }
+  $("#pack-install").addEventListener("click", () => runPack("install"));
+  $("#pack-download").addEventListener("click", () => runPack("download"));
+
+  /* ------------------------------------------------------------------ finalizar e selar */
+  function loadSeal() {
+    $("#seal-items").innerHTML = '<li class="muted">Verificando a máquina…</li>';
+    api.seal_check().then((r) => {
+      if (r.error) { $("#seal-items").innerHTML = `<li class="bad"><i></i><b>Erro</b><span>${esc(r.error)}</span></li>`; return; }
+      $("#seal-items").innerHTML = r.items.map((i) =>
+        `<li class="${i.status}"><i></i><b>${esc(i.label)}</b><span>${esc(i.detail)}</span></li>`).join("");
+      $("#seal-fix-appx").hidden = !r.items.some((i) => i.key === "appx" && i.status !== "ok");
+      $("#seal-run").disabled = !r.can_seal;
+      $("#seal-run").title = r.can_seal ? "" : "Reinicie a máquina antes de selar.";
+    });
+  }
+  $("#seal-recheck").addEventListener("click", loadSeal);
+  $("#seal-fix-appx").addEventListener("click", () => { $("#out-seal").dataset.fresh = "0"; api.seal_fix_appx(); });
+  $("#seal-generalize").addEventListener("change", (e) => ($("#seal-gen-hint").hidden = !e.target.checked));
+  $("#seal-run").addEventListener("click", () => {
+    const gen = $("#seal-generalize").checked;
+    const action = $$('input[name="seal-action"]').find((x) => x.checked).value;
+    showModal("Finalizar e selar esta máquina?",
+      `O Windows vai sair do modo de auditoria${gen ? ", ser generalizado" : ""} e ${action === "reboot" ? "reiniciar" : "desligar"}.\n\nNo próximo ligar aparece a configuração inicial do Windows para o colaborador. Esta ação não pode ser desfeita pelo programa.`,
+      () => {
+        api.seal_run(gen, action).then((r) => {
+          if (!r.ok) return toast(r.msg);
+          $("#seal-run").disabled = true;
+          $("#out-seal").dataset.fresh = "0";
+        });
+      }, "Selar agora");
+  });
 
   /* ------------------------------------------------------------------ logs */
   $("#log-open").addEventListener("click", () => api.open_logs());

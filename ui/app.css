@@ -613,3 +613,25 @@ dialog p { color: var(--muted); white-space: pre-line; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* =================================================================== pacote por modelo / selar */
+.pack-body { display: flex; gap: 24px; align-items: flex-start; }
+.pack-info { flex: 1; display: flex; flex-direction: column; gap: 12px; }
+.pack-actions { display: flex; flex-direction: column; gap: 10px; min-width: 260px; }
+.pack-panel .job { margin-top: 14px; }
+.seal-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; }
+.seal-items { grid-template-columns: 1fr; gap: 10px; }
+.seal-items li { align-items: flex-start; }
+.seal-items li i { margin-top: 6px; }
+.seal-items li span { white-space: normal; }
+.seal-opts { display: flex; flex-direction: column; gap: 14px; }
+.seg { display: flex; gap: 10px; }
+.seg label { flex: 1; cursor: pointer; }
+.seg input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.seg span { display: block; text-align: center; padding: 10px; border-radius: var(--r-md); border: 1px solid var(--line-2); color: var(--muted); }
+.seg input:checked + span { border-color: var(--accent); background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.seg input:focus-visible + span { outline: 2px solid var(--accent); }
+.seg label { position: relative; }
+.btn.big { height: 52px; font-size: 15px; }
+.btn.danger.big { background: var(--bad); color: #fff; }
+@media (max-width: 1180px) { .seal-grid { grid-template-columns: 1fr; } .pack-body { flex-direction: column; } }

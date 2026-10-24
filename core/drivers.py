@@ -303,8 +303,33 @@ VENDOR_TOOL = {
 
 
 def vendor_drivers(vendor: str, progress: Progress, cancel: threading.Event, include_bios: bool = False,
-                   wu_fallback: bool = True) -> str:
-    """Drivers do fabricante; para Positivo/outros usa o catálogo de drivers do Windows Update."""
+                   wu_fallback: bool = True, inv: dict | None = None) -> str:
+    """Drivers do fabricante. Se houver pacote offline do modelo na pasta 'Drivers por modelo',
+    ele é instalado primeiro (funciona sem internet); depois a ferramenta do fabricante completa.
+    Para Positivo/outros usa o catálogo de drivers do Windows Update."""
+    offline_msg = ""
+    if inv:
+        try:
+            from . import driverpacks
+            if driverpacks.local_status(inv)["available"]:
+                offline_msg = driverpacks.install_pack(inv, progress, cancel)
+        except Exception as e:
+            if cancel.is_set():
+                raise
+            log(f"Pacote offline do modelo: {e}", "warn")
+    try:
+        return _vendor_online(vendor, progress, cancel, include_bios, wu_fallback)
+    except NeedsReboot:
+        raise
+    except Exception:
+        if offline_msg and not cancel.is_set():
+            log("Sem a ferramenta online do fabricante; ficou o pacote offline do modelo.", "warn")
+            return offline_msg
+        raise
+
+
+def _vendor_online(vendor: str, progress: Progress, cancel: threading.Event, include_bios: bool,
+                   wu_fallback: bool) -> str:
     if vendor in VENDOR_TOOL:
         name, fn = VENDOR_TOOL[vendor]
         log(f"Fabricante detectado: {vendor.upper()} → {name}.")

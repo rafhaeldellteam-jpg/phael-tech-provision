@@ -93,3 +93,29 @@ Também dá para clicar no número da versão, no canto inferior esquerdo, para 
 **Para publicar uma versão nova:** GitHub → *Releases* → *Draft a new release* → crie a tag (ex.: `v2.0.1`) → *Publish release*.
 O GitHub Actions (`.github/workflows/release.yml`) gera o .exe no Windows com essa versão e anexa à release.
 Em poucos minutos, todos os programas abertos com internet se atualizam.
+
+
+## Finalizar e selar
+
+A aba **Finalizar e selar** confere o que costuma fazer o Sysprep falhar: reinicialização pendente, etapas do provisionamento que ainda faltam, ativação, apps da Store instalados por usuário e BitLocker.
+Depois disso, ela roda `sysprep /oobe /shutdown` (ou `/reboot`).
+- **Generalizar** fica desligado por padrão: use só se for capturar uma imagem para copiar em outras máquinas.
+- Se o Sysprep falhar, o motivo lido do log do Windows (`Panther\setuperr.log`) aparece na tela.
+
+## Pacote completo de drivers por modelo (offline)
+
+Na aba **Drivers**, em "Pacote completo do modelo":
+1. Numa máquina **com internet**, clique em **Baixar pacote deste modelo**. O programa usa o catálogo oficial da Dell, Lenovo ou HP, baixa o pacote de drivers do modelo e extrai em `Drivers por modelo\<Fabricante>\<código>` ao lado do .exe (ex.: no pendrive).
+2. Nas outras máquinas do mesmo modelo, **mesmo sem internet**, clique em **Instalar pacote do modelo**. No provisionamento ele entra sozinho na etapa de drivers do fabricante.
+
+Os pacotes têm de 1 a 3 GB por modelo, por isso ficam numa pasta e não dentro do .exe.
+Para Positivo (e outras marcas sem catálogo), basta copiar os drivers (.inf) para `Drivers por modelo\Positivo\<nome do modelo>`.
+
+## Assinatura digital
+
+1. Rode **`criar_certificado.bat`** uma vez. Ele cria o certificado da Phael Tech numa pasta na Área de Trabalho e abre a página de segredos do GitHub.
+2. Cadastre os 2 segredos indicados no `LEIA-ME.txt` (`SIGN_PFX_BASE64` e `SIGN_PFX_PASSWORD`).
+3. A partir da próxima versão, o GitHub assina o .exe. Os programas já assinados passam a **recusar atualizações que não tenham essa assinatura**.
+
+O certificado é autoassinado, então o Windows só reconhece "Phael Tech" como editor nas máquinas que confiam nele. Para isso, ligue a opção "Confiar no certificado digital da Phael Tech" no provisionamento.
+Para sumir o aviso do SmartScreen em qualquer computador, é preciso um certificado comercial (OV, de US$ 150 a 300 por ano). Basta trocar os dois segredos pelo certificado novo; o resto continua igual.

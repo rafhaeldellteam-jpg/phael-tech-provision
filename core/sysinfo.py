@@ -138,6 +138,7 @@ $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
     vendor = $vendor
     manufacturer = Clean $cs.Manufacturer
     model = $model
+    model_raw = Clean $cs.Model
     sku = $sku
     serial = $serial
     serial_source = $serialSrc

@@ -95,6 +95,24 @@ powercfg /change monitor-timeout-ac 30 | Out-Null
 """
 
 
+def trust_certificate() -> str:
+    """Instala o certificado PÚBLICO da Phael Tech como confiável nesta máquina, para o Windows
+    mostrar 'Editor: Phael Tech' em vez de 'Editor desconhecido' ao abrir o programa."""
+    cer = find_resource("phaeltech.cer")
+    if not cer:
+        return "Este .exe não tem certificado embutido (versão sem assinatura)."
+    r = run_ps(f"""
+$ErrorActionPreference = 'Stop'
+Import-Certificate -FilePath '{cer}' -CertStoreLocation Cert:\\LocalMachine\\Root | Out-Null
+Import-Certificate -FilePath '{cer}' -CertStoreLocation Cert:\\LocalMachine\\TrustedPublisher | Out-Null
+Write-Output 'OK'
+""", timeout=60)
+    if "OK" not in r.stdout:
+        raise RuntimeError("Não foi possível instalar o certificado: " + (r.stderr.strip()[-200:] or "erro"))
+    log("Certificado digital da Phael Tech marcado como confiável nesta máquina.", "ok")
+    return "Certificado instalado."
+
+
 def disable_fast_startup(progress: Progress, power_button_shutdown: bool = True, no_sleep_ac: bool = True) -> str:
     progress(-1, "Desativando inicialização rápida…")
     extra = ""

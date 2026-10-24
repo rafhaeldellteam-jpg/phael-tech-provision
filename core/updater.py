@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from .util import APP_VERSION, CREATE_NO_WINDOW, GITHUB_REPO, IS_WIN, log, ps_quote, run_ps, sub_work_dir
+from .version import SIGN_THUMBPRINT
 
 API = "https://api.github.com/repos/{repo}/releases/latest"
 LATEST = "https://github.com/{repo}/releases/latest"
@@ -182,10 +183,27 @@ def download(info: dict, progress: Callable[[float], None]) -> Path:
         raise RuntimeError("O arquivo baixado não confere com o publicado no GitHub (SHA-256).")
     if not expected:
         log("Não consegui ler o SHA-256 da release; seguindo só com a conferência de tamanho.", "warn")
+    verify_signature(tmp)
     dest.unlink(missing_ok=True)
     tmp.rename(dest)
     progress(100)
     return dest
+
+
+def verify_signature(path: Path) -> None:
+    """Se este programa é assinado, a atualização também precisa ser: pelo MESMO certificado
+    (autoassinado da Phael Tech) ou por um certificado comercial válido (caso troque no futuro)."""
+    if not SIGN_THUMBPRINT or not IS_WIN:
+        return
+    r = run_ps(f"$s = Get-AuthenticodeSignature -LiteralPath {ps_quote(str(path))}; "
+               "Write-Output ([string]$s.Status + '|' + [string]$s.SignerCertificate.Thumbprint)", timeout=60)
+    status, _, thumb = r.stdout.strip().partition("|")
+    if status == "Valid" or (thumb.upper() == SIGN_THUMBPRINT.upper() and status not in ("HashMismatch", "NotSigned")):
+        log(f"Assinatura digital da atualização conferida ({status}).", "ok")
+        return
+    path.unlink(missing_ok=True)
+    raise RuntimeError(f"A atualização não tem a assinatura digital da Phael Tech (status: {status or 'desconhecido'}). "
+                       "Por segurança, ela não foi instalada.")
 
 
 def apply(new_exe: Path) -> Path:
@@ -227,11 +245,46 @@ def apply(new_exe: Path) -> Path:
 
 
 def launch(target: Path) -> None:
-    """Abre o .exe novo como um processo independente."""
+    """Abre o .exe novo como um processo independente, avisando quais processos ele deve esperar
+    fechar antes de criar a janela (este e o lançador do PyInstaller, que é o processo pai)."""
     DETACHED = 0x00000008
     NEW_GROUP = 0x00000200
-    subprocess.Popen([str(target)], cwd=str(target.parent), close_fds=True,
+    arg = f"--apos-atualizar={os.getpid()},{os.getppid()}"
+    subprocess.Popen([str(target), arg], cwd=str(target.parent), close_fds=True,
                      creationflags=DETACHED | NEW_GROUP)
+
+
+def wait_previous_instance(argv: list[str], webview_dir: Path, limit: float = 45.0) -> None:
+    """Chamado pela versão NOVA ao abrir depois de uma atualização: espera a versão antiga e o
+    navegador interno dela (msedgewebview2) saírem de vez. Se a janela nova abrisse antes, as duas
+    disputavam a mesma pasta do WebView2 e a interface travava (era o 'bugou' depois de atualizar)."""
+    import time
+    pids = []
+    for a in argv:
+        if a.startswith("--apos-atualizar="):
+            pids = [int(x) for x in a.split("=", 1)[1].split(",") if x.strip().isdigit()]
+    if not pids:
+        return
+    try:
+        import psutil
+    except ImportError:
+        time.sleep(8)
+        return
+    start = time.time()
+    while time.time() - start < limit:
+        alive = [p for p in pids if psutil.pid_exists(p)]
+        marker = str(webview_dir).lower()
+        for proc in psutil.process_iter(["name", "cmdline"]):
+            try:
+                if (proc.info["name"] or "").lower() == "msedgewebview2.exe" and \
+                        marker in " ".join(proc.info["cmdline"] or []).lower():
+                    alive.append(proc.pid)
+            except (psutil.Error, OSError):
+                continue
+        if not alive:
+            break
+        time.sleep(0.5)
+    time.sleep(1.0)
 
 
 def cleanup_old_copies() -> None:
