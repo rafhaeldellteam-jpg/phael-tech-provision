@@ -19,10 +19,10 @@ Para testar sem compilar, rode o `build.bat` uma vez e depois use o `executar_te
 
 | Aba | Função |
 |---|---|
-| **Provisionamento** | Executa em sequência: desativa a inicialização rápida → Office → aplicativos → Windows Update (com drivers) → drivers do fabricante → finalização. Quando o Windows pede para reiniciar, o programa se agenda, reinicia, reabre sozinho e continua de onde parou. |
+| **Provisionamento** | Desativa a inicialização rápida; depois instala o Office, o Windows Update (com drivers) e os drivers do fabricante **ao mesmo tempo**, cada um com seu progresso; por fim, a finalização. Quando o Windows pede para reiniciar, o programa se agenda, reinicia, reabre sozinho e continua de onde parou. |
 | **Hardware** | Nota de saúde, tempo ligado sem reiniciar, fabricante/modelo, **Service Tag / S/N** (com botão copiar e link para o suporte), patrimônio, placa-mãe, BIOS, processador, RAM com **pentes por slot** (tamanho, tipo, velocidade e slots livres), áudio, vídeo, discos (SMART, temperatura e desgaste), placas de rede, bateria, Secure Boot e TPM. |
 | **Drivers** | Mostra a marca detectada e os dispositivos sem driver. Busca os drivers do fabricante ou do Windows Update e instala os pacotes offline. |
-| **Aplicativos** | Catálogo de instaladores da pasta `Recursos\Programas`. Os aplicativos marcados também entram no provisionamento. |
+| **Aplicativos** | Catálogo de instaladores da pasta `Recursos\Programas`, com o ícone original de cada programa (lido do próprio instalador). |
 | **Rede** | Mostra os adaptadores (IP, gateway, DNS, SSID) e testa gateway, internet, DNS e o servidor do Windows Update. |
 | **Limpeza** | Limpa temporários, o cache do Windows Update e os componentes antigos (DISM), esvazia a Lixeira, analisa o espaço por pasta e lista os programas que abrem com o Windows. |
 | **Reparo do Windows** | Roda DISM CheckHealth, ScanHealth e RestoreHealth e depois o SFC /scannow, mostrando o progresso. |

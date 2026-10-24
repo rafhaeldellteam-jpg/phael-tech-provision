@@ -115,3 +115,81 @@ def install_program(entry: dict, progress: Progress, cancel: threading.Event) ->
     progress(100, "Instalado")
     log(f"{title}: instalado.", "ok")
     return "Instalado."
+
+
+# --------------------------------------------------------------------------- ícones
+# O ícone de cada programa é lido do próprio instalador (ou do programa já instalado),
+# do mesmo jeito que o Explorador de Arquivos faz. Fica em cache no ProgramData.
+ICON_PS = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName System.Drawing
+Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+public static class PtIcon {
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  public static extern uint PrivateExtractIcons(string file, int index, int cx, int cy, IntPtr[] icons, uint[] ids, uint count, uint flags);
+  [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr h);
+}
+'@
+$items = New-Object System.Collections.ArrayList
+__ITEMS__
+foreach ($it in $items) {
+    $key = $it[0]; $path = $it[1]; $dest = $it[2]
+    if (-not (Test-Path -LiteralPath $path)) { continue }
+    $bmp = $null
+    $h = New-Object IntPtr[] 1; $ids = New-Object uint32[] 1
+    $n = [PtIcon]::PrivateExtractIcons($path, 0, 96, 96, $h, $ids, 1, 0)
+    if ($n -gt 0 -and $h[0] -ne [IntPtr]::Zero) {
+        $ico = [System.Drawing.Icon]::FromHandle($h[0]); $bmp = $ico.ToBitmap(); [void][PtIcon]::DestroyIcon($h[0])
+    } else {
+        $ico = [System.Drawing.Icon]::ExtractAssociatedIcon($path); if ($ico) { $bmp = $ico.ToBitmap() }
+    }
+    if ($bmp) { $bmp.Save($dest, [System.Drawing.Imaging.ImageFormat]::Png); Write-Output ('OK ' + $key) }
+}
+"""
+
+ICON_EXTRA = {
+    "office": ["OfficeSetup.exe"],
+    "powertoys": [rf"{PF}\PowerToys\PowerToys.exe", rf"{LAD}\PowerToys\PowerToys.exe"],
+}
+
+
+def _icon_source(entry: dict) -> Path | None:
+    for d in entry.get("detect", []):           # programa instalado tem o ícone definitivo
+        if Path(d).exists():
+            return Path(d)
+    f = program_file(entry)
+    if f:
+        return f
+    for cand in ICON_EXTRA.get(entry["key"], []):
+        p = Path(cand) if Path(cand).is_absolute() else find_resource(cand)
+        if p and Path(p).exists():
+            return Path(p)
+    return None
+
+
+def program_icons() -> dict:
+    """{key: 'data:image/png;base64,...'} para os programas que tiverem ícone."""
+    import base64
+    from .util import IS_WIN, ps_quote, run_ps, sub_work_dir
+    cache = sub_work_dir("icones")
+    todo, out = [], {}
+    for e in PROGRAMS:
+        src = _icon_source(e)
+        if not src:
+            continue
+        dest = cache / f"{e['key']}-{src.stat().st_size}.png"
+        if not dest.exists():
+            todo.append((e["key"], src, dest))
+    if todo and IS_WIN:
+        items = "\n".join(f"[void]$items.Add(@({ps_quote(k)}, {ps_quote(str(s))}, {ps_quote(str(d))}))"
+                          for k, s, d in todo)
+        run_ps(ICON_PS.replace("__ITEMS__", items), timeout=90)
+    for e in PROGRAMS:
+        src = _icon_source(e)
+        if not src:
+            continue
+        dest = cache / f"{e['key']}-{src.stat().st_size}.png"
+        if dest.exists() and dest.stat().st_size > 100:
+            out[e["key"]] = "data:image/png;base64," + base64.b64encode(dest.read_bytes()).decode()
+    return out

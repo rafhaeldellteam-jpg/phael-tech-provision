@@ -23,9 +23,7 @@
     { key: "power", phase: 0, icon: "i-bolt", title: "Desativar inicialização rápida",
       desc: "Evita problemas de atualizações e drivers, e garante o desligamento completo do sistema. Botão liga/desliga passa a desligar." },
     { key: "office", phase: 1, icon: "i-office", title: "Instalar Microsoft Office",
-      desc: "Instalação do Microsoft 365 (Word, Excel, PowerPoint, etc.) pelo instalador embutido no programa." },
-    { key: "apps", phase: 1, icon: "i-grid", title: "Instalar aplicativos padrão",
-      desc: "Instala os aplicativos marcados na aba Aplicativos (Chrome, AnyDesk, WinRAR…)." },
+      desc: "Instalação do Microsoft 365 (Word, Excel, PowerPoint, etc.). Roda ao mesmo tempo que o Windows Update e os drivers do fabricante." },
     { key: "wu", phase: 2, icon: "i-update", title: "Atualizar Windows Update",
       desc: "Instala todas as atualizações e drivers do catálogo Microsoft. Se precisar reiniciar, o programa reabre e continua sozinho." },
     { key: "vendor", phase: 2, icon: "i-laptop", title: "Atualizar drivers do fabricante",
@@ -33,7 +31,7 @@
     { key: "finalize", phase: 3, icon: "i-flag", title: "Finalização",
       desc: "Limpa arquivos temporários e salva o relatório da máquina na Área de Trabalho." },
   ];
-  const PHASES = ["Preparação da máquina", "Instalações (Office e apps)", "Atualizações (Windows + fabricante)", "Finalização"];
+  const PHASES = ["Preparação da máquina", "Instalação do Office", "Atualizações (Windows + fabricante)", "Finalização"];
   const STATUS_TXT = { wait: "Aguardando", run: "Em andamento…", ok: "Concluído", err: "Falhou", skip: "Não selecionado" };
   const VENDOR_TOOL = {
     dell: "Dell Command | Update — drivers, BIOS e utilitários Dell para este modelo.",
@@ -84,7 +82,7 @@
         <div class="st st-wait">
           <span class="st-ic wait">${icon("i-clock")}</span>
           <b>${STATUS_TXT.wait}<span class="pct"></span></b>
-          <span class="st-text">Será executado na ordem.</span>
+          <span class="st-text">Aguardando o início.</span>
         </div>
       </div>`).join("");
     $$(".task input").forEach((inp) => inp.addEventListener("change", () => {
@@ -156,7 +154,7 @@
       <span>${esc(it.name)}</span><em class="${it.state}">${it.pct === null ? "—" : it.pct + "%"}</em></li>`).join("");
     $$("#stepper li").forEach((li, i) => {
       li.classList.toggle("done", items[i].state === "ok");
-      li.classList.toggle("active", i === activePhase || (activePhase < 0 && !S.busy && i === 0 && pct === 0));
+      li.classList.toggle("active", items[i].state === "run" || (activePhase < 0 && !S.busy && i === 0 && pct === 0));
     });
   }
 
@@ -252,12 +250,10 @@
 
   /* ------------------------------------------------------------------ hardware */
   function fmtUptime(sec) {
-    const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
-    const parts = [];
-    if (d) parts.push(d + (d === 1 ? " dia" : " dias"));
-    if (h || d) parts.push(h + "h");
-    parts.push(String(m).padStart(d || h ? 2 : 1, "0") + "min");
-    return parts.join(" ");
+    const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60), x = sec % 60;
+    const p2 = (n) => String(n).padStart(2, "0");
+    return (d ? d + (d === 1 ? " dia " : " dias ") : "") + `${p2(h)}h ${p2(m)}min ${p2(x)}s`;
   }
   let upBase = null;
   function tickUptime() {
@@ -265,7 +261,7 @@
     const sec = upBase.sec + Math.floor((Date.now() - upBase.at) / 1000);
     $("#uptime").textContent = fmtUptime(sec);
   }
-  setInterval(tickUptime, 15000);
+  setInterval(tickUptime, 1000);   // conta os segundos ao vivo
 
   function kv(pairs) {
     return pairs.filter(([, v]) => v !== undefined && v !== null && v !== "")
@@ -439,7 +435,10 @@
       };
       set("live-cpu", m.cpu, Math.round(m.cpu) + "%");
       set("live-mem", m.mem_pct, Math.round(m.mem_pct) + "%");
-      if (m.uptime) upBase = { sec: m.uptime, at: Date.now() };
+      if (m.uptime) {
+        const now = upBase ? upBase.sec + Math.floor((Date.now() - upBase.at) / 1000) : null;
+        if (now === null || Math.abs(now - m.uptime) > 5) upBase = { sec: m.uptime, at: Date.now() };
+      }
       tickUptime();
     }).catch(() => {});
   }
@@ -514,6 +513,10 @@
         <div class="app-st"><span class="app-text">${p.available ? "" : "Instalador não encontrado em Recursos\\Programas"}</span></div>
       </div>`;
     }).join("");
+    api.app_icons().then((icons) => Object.entries(icons || {}).forEach(([k, src]) => {
+      const tile = $(`.app[data-key="${k}"] .tile`);
+      if (tile) { tile.classList.add("has-icon"); tile.innerHTML = `<img src="${src}" alt="">`; }
+    })).catch(() => {});
     $$("#app-grid .app input").forEach((inp) => inp.addEventListener("change", () => {
       const k = inp.closest(".app").dataset.key;
       inp.checked ? S.appsSel.add(k) : S.appsSel.delete(k);

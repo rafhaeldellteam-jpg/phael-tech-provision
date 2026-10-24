@@ -22,8 +22,10 @@ from core.provision import NeedsReboot
 from core.util import (APP_NAME, APP_VERSION, IS_WIN, bundle_dir, find_resource, fmt_bytes, is_admin, log,
                        relaunch_as_admin, run, work_dir)
 
-STEP_ORDER = ["power", "office", "apps", "wu", "vendor", "finalize"]
-STEP_TITLES = {"power": "Energia", "office": "Microsoft Office", "apps": "Aplicativos", "wu": "Windows Update",
+STEP_ORDER = ["power", "office", "wu", "vendor", "finalize"]
+# Etapas do mesmo grupo rodam ao mesmo tempo (Office + Windows Update + drivers do fabricante)
+STEP_GROUPS = [["power"], ["office", "wu", "vendor"], ["finalize"]]
+STEP_TITLES = {"power": "Energia", "office": "Microsoft Office", "wu": "Windows Update",
                "vendor": "Drivers do fabricante", "finalize": "Finalização"}
 
 
@@ -166,33 +168,32 @@ class Api:
         return cb
 
     def _provision_worker(self, steps: list[str], opts: dict) -> None:
-        all_ok = True
+        results: dict[str, str] = {}      # ok | err | reboot
+        reboot_msgs: list[str] = []
         try:
             log(f"Provisionamento iniciado: {', '.join(STEP_TITLES[s] for s in steps)}.")
             for s in STEP_ORDER:
                 if s not in steps and not opts.get("resumed"):
                     self._emit({"t": "step", "key": s, "status": "skip", "pct": 0, "text": "Não selecionado"})
-            for i, key in enumerate(steps):
-                if self._cancel.is_set():
-                    break
-                self._emit({"t": "step", "key": key, "status": "run", "pct": -1, "text": "Iniciando…"})
-                prog = self._step_progress(key)
-                try:
-                    msg = self._run_step(key, prog, opts)
-                    self._emit({"t": "step", "key": key, "status": "ok", "pct": 100, "text": msg})
-                except NeedsReboot as nr:
-                    pending = steps[i:] if key in ("wu", "vendor") else steps[i + 1:]
-                    self._emit({"t": "step", "key": key, "status": "wait", "pct": 100,
-                                "text": "Continua após reiniciar"})
-                    self._schedule_reboot(pending, opts, str(nr))
+            opts = dict(opts, _parallel=steps)
+            for group in STEP_GROUPS:
+                keys = [k for k in group if k in steps]
+                if not keys or self._cancel.is_set():
+                    continue
+                if len(keys) > 1:
+                    log("Rodando ao mesmo tempo: " + ", ".join(STEP_TITLES[k] for k in keys) + ".")
+                threads = [threading.Thread(target=self._run_one, args=(k, opts, results, reboot_msgs), daemon=True)
+                           for k in keys]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+                if reboot_msgs:
+                    # o que pediu reinício continua depois; o que ainda não rodou também
+                    pending = [k for k in steps if results.get(k) in (None, "reboot")]
+                    self._schedule_reboot(pending, opts, reboot_msgs[0])
                     return
-                except Exception as e:
-                    all_ok = False
-                    if self._cancel.is_set():
-                        self._emit({"t": "step", "key": key, "status": "err", "pct": 0, "text": "Cancelado"})
-                        break
-                    log(f"{STEP_TITLES[key]}: {e}", "error")
-                    self._emit({"t": "step", "key": key, "status": "err", "pct": 0, "text": str(e)[:160]})
+            all_ok = all(results.get(k) == "ok" for k in steps)
             provision.clear_state()
             provision.clear_resume_on_boot()
             done_msg = ("Provisionamento cancelado." if self._cancel.is_set() else
@@ -207,6 +208,24 @@ class Api:
         finally:
             self._busy.release()
 
+    def _run_one(self, key: str, opts: dict, results: dict, reboot_msgs: list) -> None:
+        self._emit({"t": "step", "key": key, "status": "run", "pct": -1, "text": "Iniciando…"})
+        try:
+            msg = self._run_step(key, self._step_progress(key), opts)
+            results[key] = "ok"
+            self._emit({"t": "step", "key": key, "status": "ok", "pct": 100, "text": msg})
+        except NeedsReboot as nr:
+            results[key] = "reboot"
+            reboot_msgs.append(str(nr))
+            self._emit({"t": "step", "key": key, "status": "wait", "pct": 100, "text": "Continua após reiniciar"})
+        except Exception as e:
+            results[key] = "err"
+            if self._cancel.is_set():
+                self._emit({"t": "step", "key": key, "status": "err", "pct": 0, "text": "Cancelado"})
+                return
+            log(f"{STEP_TITLES[key]}: {e}", "error")
+            self._emit({"t": "step", "key": key, "status": "err", "pct": 0, "text": str(e)[:160]})
+
     def _run_step(self, key: str, prog, opts: dict) -> str:
         inv = self.inventory()
         vendor = (inv or {}).get("vendor", "other")
@@ -214,18 +233,13 @@ class Api:
             return provision.disable_fast_startup(prog, opts.get("power_button", True), opts.get("no_sleep", True))
         if key == "office":
             return provision.install_office(prog, self._cancel)
-        if key == "apps":
-            keys = [k for k in opts.get("apps", []) if k != "office"]
-            if not keys:
-                return "Nenhum aplicativo selecionado."
-            fails = self._install_programs(keys, prog)
-            if fails:
-                raise RuntimeError(f"{fails} aplicativo(s) com falha — veja a aba Aplicativos.")
-            return f"{len(keys)} aplicativo(s) instalado(s)."
         if key == "wu":
             return provision.windows_update(prog, self._cancel)
         if key == "vendor":
-            return drivers.vendor_drivers(vendor, prog, self._cancel, opts.get("include_bios", False))
+            # se o Windows Update está rodando junto, ele já cuida dos drivers do catálogo Microsoft
+            wu_together = "wu" in opts.get("_parallel", [])
+            return drivers.vendor_drivers(vendor, prog, self._cancel, opts.get("include_bios", False),
+                                          wu_fallback=not wu_together)
         if key == "finalize":
             self._inventory = None
             return provision.finalize(prog, self.inventory())
@@ -292,6 +306,13 @@ class Api:
                 log(f"{entry['title']}: {e}", "error")
                 self._emit({"t": "app", "key": key, "status": "err", "pct": 0, "text": str(e)[:140]})
         return fails
+
+    def app_icons(self) -> dict:
+        try:
+            return programs.program_icons()
+        except Exception as e:
+            log(f"Ícones dos aplicativos: {e}", "warn")
+            return {}
 
     def program_status(self) -> dict:
         return {p["key"]: programs.is_installed(p) for p in programs.PROGRAMS}

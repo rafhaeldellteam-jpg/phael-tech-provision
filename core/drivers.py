@@ -302,7 +302,8 @@ VENDOR_TOOL = {
 }
 
 
-def vendor_drivers(vendor: str, progress: Progress, cancel: threading.Event, include_bios: bool = False) -> str:
+def vendor_drivers(vendor: str, progress: Progress, cancel: threading.Event, include_bios: bool = False,
+                   wu_fallback: bool = True) -> str:
     """Drivers do fabricante; para Positivo/outros usa o catálogo de drivers do Windows Update."""
     if vendor in VENDOR_TOOL:
         name, fn = VENDOR_TOOL[vendor]
@@ -314,9 +315,14 @@ def vendor_drivers(vendor: str, progress: Progress, cancel: threading.Event, inc
         except Exception as e:  # ferramenta do fabricante falhou: cai para o Windows Update
             if cancel.is_set():
                 raise
+            if not wu_fallback:
+                raise RuntimeError(f"{name} falhou ({e}). Os drivers do Windows Update estão sendo instalados na etapa ao lado.")
             log(f"{name} falhou ({e}). Usando drivers do Windows Update como alternativa.", "warn")
             return windows_update_drivers(progress, cancel)
     label = "Positivo" if vendor == "positivo" else "fabricante não identificado"
+    if not wu_fallback:
+        progress(100, "Drivers pelo Windows Update")
+        return f"{label.capitalize()}: os drivers vêm do Windows Update (etapa ao lado)."
     log(f"Fabricante: {label} → drivers pelo catálogo do Windows Update.")
     return windows_update_drivers(progress, cancel)
 

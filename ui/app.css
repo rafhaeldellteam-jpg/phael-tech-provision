@@ -422,7 +422,7 @@ p { margin: 0; }
 
 .uptime { display: flex; flex-direction: column; gap: 6px; }
 .uptime .panel-title { margin-bottom: 4px; }
-.uptime-num { font-family: var(--display); font-size: 34px; font-weight: 700; line-height: 1.1; }
+.uptime-num { font-family: var(--display); font-size: 30px; font-weight: 700; line-height: 1.1; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .uptime .btn { align-self: flex-start; margin-top: auto; }
 .hint { font-size: 12.5px; color: var(--warn); background: var(--warn-soft); padding: 8px 10px; border-radius: var(--r-sm); }
 
@@ -505,6 +505,8 @@ p { margin: 0; }
 .app.st-ok { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
 .app.st-err { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); }
 .app .tile { width: 48px; height: 48px; }
+.tile.has-icon { background: transparent !important; }
+.tile.has-icon img { width: 44px; height: 44px; object-fit: contain; image-rendering: auto; }
 .app h4 { margin: 0; font-size: 15px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .app p { color: var(--muted); font-size: 12.5px; }
 .app .app-st { grid-column: 2 / -1; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--muted); }
