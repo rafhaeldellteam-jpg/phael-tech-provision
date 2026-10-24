@@ -237,7 +237,7 @@
     $("#cd-msg").textContent = ev.msg;
     $("#cd-s").textContent = ev.s;
   }
-  $("#cd-cancel").addEventListener("click", () => api.cancel());
+  $("#cd-cancel").addEventListener("click", () => api.cancel_reboot());
 
   function showModal(title, text) {
     $("#modal-title").textContent = title;
@@ -773,6 +773,10 @@
       renderRepair();
       updateOverall();
       if (!b.admin) toast("Execute como administrador para aplicar as etapas.");
+      if (b.updated_from) {
+        showUpdate(`Atualizado para a versão ${b.version}`, `Versão anterior: ${b.updated_from}. A atualização automática funcionou.`, { buttons: true });
+        $("#ub-now").hidden = true; $("#ub-later").textContent = "Fechar";
+      }
       if (b.continuing && b.state?.pending?.length) handleResume(b.state);
       loadInventory(false).then(pollLive);
       setInterval(pollLive, 3000);

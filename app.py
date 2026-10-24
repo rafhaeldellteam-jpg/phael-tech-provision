@@ -37,6 +37,7 @@ class Api:
         self._window = None
         self._events: queue.Queue = queue.Queue()
         self._cancel = threading.Event()
+        self._reboot_cancel = threading.Event()
         self._busy = threading.Lock()          # provisionamento / programas / drivers (não rodam juntos)
         self._maint_busy = threading.Lock()
         self._inventory: dict | None = None
@@ -79,7 +80,24 @@ class Api:
                         | {"available": drivers.offline_available(p)} for p in drivers.OFFLINE_PACKS],
             "repair": [{k: s[k] for k in ("key", "title", "desc")} for s in maintenance.REPAIR_STEPS],
             "log_path": str(log.path),
+            "updated_from": self._version_changed(),
         }
+
+    def _version_changed(self) -> str:
+        """Versão anterior se o programa acabou de ser atualizado ('' caso contrário)."""
+        marker = work_dir() / "versao.txt"
+        try:
+            before = marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            before = ""
+        try:
+            marker.write_text(APP_VERSION, encoding="utf-8")
+        except OSError:
+            pass
+        if before and before != APP_VERSION:
+            log(f"Programa atualizado: {before} → {APP_VERSION}.", "ok")
+            return before
+        return ""
 
     def inventory(self, refresh: bool = False) -> dict:
         with self._inv_lock:
@@ -260,13 +278,16 @@ class Api:
         else:
             self._emit({"t": "reboot_prompt", "msg": reason})
 
+    def cancel_reboot(self) -> None:
+        self._reboot_cancel.set()
+
     def _countdown_reboot(self, seconds: int, msg: str) -> None:
-        self._cancel.clear()
+        self._reboot_cancel.clear()
         for s in range(seconds, 0, -1):
             self._emit({"t": "countdown", "s": s, "msg": msg})
-            if self._cancel.wait(1):
+            if self._reboot_cancel.wait(1):
                 self._emit({"t": "countdown", "s": 0, "msg": "Reinicialização cancelada."})
-                log("Reinicialização automática cancelada pelo usuário.", "warn")
+                log("Reinicialização automática cancelada. O provisionamento continua quando você reiniciar.", "warn")
                 return
         self._emit({"t": "countdown", "s": 0, "msg": "Reiniciando…"})
         provision.reboot(3, msg)
