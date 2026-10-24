@@ -23,8 +23,9 @@ from core.util import (APP_NAME, APP_VERSION, IS_WIN, bundle_dir, find_resource,
                        relaunch_as_admin, run, work_dir)
 
 STEP_ORDER = ["power", "office", "wu", "vendor", "finalize"]
-# Etapas do mesmo grupo rodam ao mesmo tempo (Office + Windows Update + drivers do fabricante)
-STEP_GROUPS = [["power"], ["office", "wu", "vendor"], ["finalize"]]
+# Etapas do mesmo grupo rodam ao mesmo tempo: o Office instala junto com o Windows Update;
+# os drivers do fabricante só começam depois que o Windows Update terminar.
+STEP_GROUPS = [["power"], ["office", "wu"], ["vendor"], ["finalize"]]
 STEP_TITLES = {"power": "Energia", "office": "Microsoft Office", "wu": "Windows Update",
                "vendor": "Drivers do fabricante", "finalize": "Finalização"}
 
@@ -236,7 +237,7 @@ class Api:
         if key == "wu":
             return provision.windows_update(prog, self._cancel)
         if key == "vendor":
-            # se o Windows Update está rodando junto, ele já cuida dos drivers do catálogo Microsoft
+            # se o Windows Update fez parte do provisionamento, os drivers do catálogo Microsoft já entraram
             wu_together = "wu" in opts.get("_parallel", [])
             return drivers.vendor_drivers(vendor, prog, self._cancel, opts.get("include_bios", False),
                                           wu_fallback=not wu_together)
@@ -454,12 +455,13 @@ class Api:
                         self._emit({"t": "upd", "status": "download", "pct": p})
                 path = updater.download(info, prog)
                 log("Download conferido (SHA-256). Instalando a atualização…", "ok")
-                updater.apply(path)
+                target = updater.apply(path)          # troca o .exe agora (falha = erro na tela)
                 self._emit({"t": "upd", "status": "restart", "pct": 100})
-                time.sleep(2.5)
-                if self._window is not None:
-                    self._window.destroy()
-                os._exit(0)
+                time.sleep(1.5)
+                self._sensors.stop()
+                _release_instance()                   # libera a trava para a versão nova abrir
+                updater.launch(target)
+                os._exit(0)                           # fecha na hora, sem esperar a janela
             except Exception as e:
                 log(f"Falha na atualização: {e}", "error")
                 self._emit({"t": "upd", "status": "error", "msg": str(e)})
@@ -517,6 +519,13 @@ def _already_running() -> bool:
     return ctypes.windll.kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
 
 
+def _release_instance() -> None:
+    global _INSTANCE_MUTEX
+    if IS_WIN and _INSTANCE_MUTEX:
+        ctypes.windll.kernel32.CloseHandle(_INSTANCE_MUTEX)
+        _INSTANCE_MUTEX = None
+
+
 def main() -> None:
     if IS_WIN and not is_admin():
         if relaunch_as_admin():
@@ -524,8 +533,16 @@ def main() -> None:
         _message_box("Execute o Phael Tech Provision como administrador.")
         return
     if _already_running():
-        _message_box("O Phael Tech Provision já está aberto nesta máquina.")
-        return
+        # logo após uma atualização a versão antiga pode levar alguns segundos para sair
+        for _ in range(20):
+            time.sleep(0.5)
+            _release_instance()
+            if not _already_running():
+                break
+        else:
+            _message_box("O Phael Tech Provision já está aberto nesta máquina.")
+            return
+    threading.Thread(target=updater.cleanup_old_copies, daemon=True).start()
     try:
         import webview
     except ImportError:

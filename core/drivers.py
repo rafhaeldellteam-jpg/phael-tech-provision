@@ -316,13 +316,13 @@ def vendor_drivers(vendor: str, progress: Progress, cancel: threading.Event, inc
             if cancel.is_set():
                 raise
             if not wu_fallback:
-                raise RuntimeError(f"{name} falhou ({e}). Os drivers do Windows Update estão sendo instalados na etapa ao lado.")
+                raise RuntimeError(f"{name} falhou ({e}). Os drivers do Windows Update já foram instalados na etapa anterior.")
             log(f"{name} falhou ({e}). Usando drivers do Windows Update como alternativa.", "warn")
             return windows_update_drivers(progress, cancel)
     label = "Positivo" if vendor == "positivo" else "fabricante não identificado"
     if not wu_fallback:
         progress(100, "Drivers pelo Windows Update")
-        return f"{label.capitalize()}: os drivers vêm do Windows Update (etapa ao lado)."
+        return f"{label.capitalize()}: os drivers vieram do Windows Update (etapa anterior)."
     log(f"Fabricante: {label} → drivers pelo catálogo do Windows Update.")
     return windows_update_drivers(progress, cancel)
 

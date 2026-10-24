@@ -291,28 +291,60 @@ def windows_update_round(progress: Progress, cancel: threading.Event, only_drive
     return result
 
 
-def windows_update(progress: Progress, cancel: threading.Event, max_rounds: int = 4) -> str:
-    """Instala tudo que estiver pendente (inclusive drivers do catálogo Microsoft).
-    Faz novas buscas até zerar; se precisar reiniciar, levanta NeedsReboot."""
+def show_windows_update(scan: bool = True) -> None:
+    """Abre Configurações > Windows Update e clica em 'Verificar atualizações' (o usuário vê tudo)."""
+    if not IS_WIN:
+        return
+    try:
+        os.startfile("ms-settings:windowsupdate")
+    except OSError:
+        pass
+    if scan:
+        uso = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "UsoClient.exe"
+        if uso.is_file():
+            run([str(uso), "StartInteractiveScan"], timeout=60)
+
+
+def windows_update(progress: Progress, cancel: threading.Event, max_rounds: int = 8) -> str:
+    """Abre o Windows Update nas Configurações, procura e instala TUDO (inclusive drivers).
+    Repete a busca até não sobrar nada; o que falhar é tentado de novo. Se precisar reiniciar,
+    levanta NeedsReboot e o programa continua sozinho depois."""
     state = load_state()
     rounds_done = int(state.get("wu_rounds", 0))
-    if rounds_done >= 12:
-        log("Limite de 12 ciclos do Windows Update atingido — seguindo para a próxima etapa.", "warn")
+    if rounds_done >= 15:
+        log("Limite de 15 ciclos do Windows Update atingido — seguindo para a próxima etapa.", "warn")
         return "Limite de ciclos atingido; confira o Windows Update manualmente."
+    progress(-1, "Abrindo o Windows Update…")
+    log("Abrindo Configurações > Windows Update e iniciando a verificação.")
+    show_windows_update(scan=True)
+    if cancel.wait(15):                      # dá tempo da tela começar a busca
+        raise RuntimeError("Cancelado")
+    retries = 0
     for rnd in range(1, max_rounds + 1):
         log(f"Windows Update — verificação {rnd} (ciclo total {rounds_done + rnd}).")
         res = windows_update_round(progress, cancel)
         if res.get("pending", 0) == 0:
             progress(100, "Sistema totalmente atualizado")
             log("Nenhuma atualização pendente. Windows totalmente atualizado.", "ok")
+            show_windows_update(scan=True)   # a tela também mostra 'Você está atualizado'
             return "Sistema totalmente atualizado."
         if res.get("reboot"):
+            state = load_state()
             state["wu_rounds"] = rounds_done + rnd
             save_state(state)
             raise NeedsReboot("Atualizações instaladas; é preciso reiniciar para continuar.")
         if res.get("installed", 0) == 0:
-            # nada foi instalado nesta rodada — evita loop infinito
-            return f"{res.get('failed', 0)} atualização(ões) não puderam ser instaladas. Veja o log."
+            # nada entrou nesta rodada (ex.: a tela do Windows Update estava instalando ao mesmo tempo):
+            # espera e repete até 3 vezes antes de desistir
+            retries += 1
+            if retries > 3:
+                return f"{res.get('failed', 0)} atualização(ões) não puderam ser instaladas após 3 tentativas. Veja o log."
+            log(f"{res.get('failed', 0)} atualização(ões) falharam; tentando de novo em 60 s ({retries}/3).", "warn")
+            progress(-1, f"Repetindo as que falharam ({retries}/3)…")
+            if cancel.wait(60):
+                raise RuntimeError("Cancelado")
+        else:
+            retries = 0
     return "Atualizações aplicadas (limite de verificações atingido)."
 
 

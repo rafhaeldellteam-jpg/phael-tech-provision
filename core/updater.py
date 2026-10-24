@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -187,43 +188,65 @@ def download(info: dict, progress: Callable[[float], None]) -> Path:
     return dest
 
 
-SWAP_PS = r"""
-$ErrorActionPreference = 'SilentlyContinue'
-$pidOld = __PID__
-$target = __TARGET__
-$new = __NEW__
-for ($i = 0; $i -lt 120; $i++) { if (-not (Get-Process -Id $pidOld -ErrorAction SilentlyContinue)) { break }; Start-Sleep -Milliseconds 500 }
-Start-Sleep -Seconds 1
-$backup = $target + '.old'
-$ok = $false
-for ($i = 0; $i -lt 20 -and -not $ok; $i++) {
-    try {
-        if (Test-Path $backup) { Remove-Item $backup -Force }
-        Move-Item -LiteralPath $target -Destination $backup -Force -ErrorAction Stop
-        Copy-Item -LiteralPath $new -Destination $target -Force -ErrorAction Stop
-        $ok = $true
-    } catch {
-        if ((-not (Test-Path $target)) -and (Test-Path $backup)) { Move-Item -LiteralPath $backup -Destination $target -Force }
-        Start-Sleep -Seconds 1
-    }
-}
-Start-Process -FilePath $target
-if ($ok) { Start-Sleep -Seconds 5; Remove-Item $backup -Force; Remove-Item $new -Force }
-"""
+def apply(new_exe: Path) -> Path:
+    """Troca o .exe NA HORA, com o programa ainda aberto.
 
-
-def apply(new_exe: Path) -> None:
-    """Agenda a troca do .exe e retorna; quem chama deve fechar o programa em seguida."""
+    O Windows não deixa sobrescrever um .exe em execução, mas deixa RENOMEAR. Então:
+    o atual vira "<nome>.exe.old", a versão nova é copiada no nome original e quem chama
+    abre o .exe novo e fecha este. Não depende de nenhum script rodando depois que o programa fecha
+    (era isso que falhava: o aviso dizia que ia reiniciar, mas a troca nunca acontecia).
+    """
     if not can_self_update():
         raise RuntimeError("A atualização automática só funciona no .exe compilado.")
     target = Path(sys.executable).resolve()
-    if not os.access(target.parent, os.W_OK):
-        raise RuntimeError(f"Sem permissão para gravar em {target.parent}.")
-    script = (SWAP_PS.replace("__PID__", str(os.getpid())).replace("__TARGET__", ps_quote(str(target)))
-              .replace("__NEW__", ps_quote(str(new_exe))))
-    ps1 = sub_work_dir("atualizacao") / "aplicar.ps1"
-    ps1.write_text(script, encoding="utf-8-sig")
+    old = target.with_name(target.name + ".old")
+    if old.exists():
+        try:
+            old.unlink()
+        except OSError:
+            old = target.with_name(f"{target.name}.{os.getpid()}.old")
+    try:
+        os.rename(target, old)
+    except OSError as e:
+        raise RuntimeError(f"Não foi possível renomear o programa atual ({e}). "
+                           "Ele está numa pasta somente leitura?") from e
+    try:
+        shutil.copyfile(new_exe, target)
+    except Exception as e:
+        try:
+            os.rename(old, target)          # desfaz: volta o programa antigo
+        except OSError:
+            pass
+        raise RuntimeError(f"Não foi possível gravar a versão nova ({e}).") from e
+    try:
+        new_exe.unlink()
+    except OSError:
+        pass
+    log(f"Atualização aplicada em {target}. Reabrindo na versão nova…", "ok")
+    return target
+
+
+def launch(target: Path) -> None:
+    """Abre o .exe novo como um processo independente."""
     DETACHED = 0x00000008
-    subprocess.Popen(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
-                      "-File", str(ps1)], creationflags=CREATE_NO_WINDOW | DETACHED, close_fds=True)
-    log(f"Atualização agendada: {target.name} será substituído e reaberto.", "ok")
+    NEW_GROUP = 0x00000200
+    subprocess.Popen([str(target)], cwd=str(target.parent), close_fds=True,
+                     creationflags=DETACHED | NEW_GROUP)
+
+
+def cleanup_old_copies() -> None:
+    """Apaga os '.exe.old' deixados por atualizações anteriores (tenta por até 2 minutos)."""
+    if not can_self_update():
+        return
+    import time
+    me = Path(sys.executable).resolve()
+    for _ in range(24):
+        left = 0
+        for f in me.parent.glob(me.name + "*.old"):
+            try:
+                f.unlink()
+            except OSError:
+                left += 1
+        if not left:
+            return
+        time.sleep(5)
