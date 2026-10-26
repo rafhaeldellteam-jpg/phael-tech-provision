@@ -501,6 +501,12 @@ class Api:
         threading.Thread(target=worker, daemon=True).start()
         return {"ok": True}
 
+    def seal_open_gui(self) -> dict:
+        try:
+            return {"ok": True, "msg": seal.open_gui()}
+        except Exception as e:
+            return {"ok": False, "msg": str(e)}
+
     def seal_run(self, generalize: bool, action: str) -> dict:
         if not self._busy.acquire(blocking=False):
             return {"ok": False, "msg": "Aguarde a tarefa atual terminar."}

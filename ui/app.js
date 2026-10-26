@@ -788,6 +788,7 @@
     });
   }
   $("#seal-recheck").addEventListener("click", loadSeal);
+  $("#seal-gui").addEventListener("click", () => api.seal_open_gui().then((r) => toast(r.msg)));
   $("#seal-fix-appx").addEventListener("click", () => { $("#out-seal").dataset.fresh = "0"; api.seal_fix_appx(); });
   $("#seal-generalize").addEventListener("change", (e) => ($("#seal-gen-hint").hidden = !e.target.checked));
   $("#seal-run").addEventListener("click", () => {

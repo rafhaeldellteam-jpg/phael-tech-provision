@@ -148,3 +148,16 @@ def seal(generalize: bool, action: str, inventory: dict | None, on_line: Callabl
     if errs:
         msg += "\n\nMotivo informado pelo Windows:\n" + errs
     raise RuntimeError(msg)
+
+
+def open_gui() -> str:
+    """Abre a janela normal do Sysprep (Ferramenta de Preparação do Sistema) para escolher na mão."""
+    if not SYSPREP.is_file():
+        raise FileNotFoundError("sysprep.exe não encontrado.")
+    if IS_WIN:
+        r = run(["tasklist", "/FI", "IMAGENAME eq sysprep.exe", "/NH"], timeout=20)
+        if "sysprep.exe" in r.stdout.lower():
+            return "O Sysprep já está aberto (veja na barra de tarefas)."
+    subprocess.Popen([str(SYSPREP)], cwd=str(SYSPREP.parent))
+    log("Janela do Sysprep aberta pelo programa.")
+    return "Sysprep aberto."
