@@ -16,9 +16,13 @@ from .util import (IS_WIN, find_resource, log, run, run_ps, stream_ps, sub_work_
 
 Progress = Callable[[float, str], None]   # (0-100 ou -1 = indeterminado, texto)
 
-RUNONCE_KEY = r"HKLM\Software\Microsoft\Windows\CurrentVersion\RunOnce"
+RUNONCE_KEY = r"HKLM\Software\Microsoft\Windows\CurrentVersion\RunOnce"   # versões antigas (limpeza)
+RUN_KEY = r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run"
 RUNONCE_NAME = "PhaelTechProvision"
+TASK_NAME = "PhaelTechProvision-Continuar"
 STATE_FILE = "estado.json"
+HISTORY_FILE = "historico-instalacoes.json"
+_state_lock = threading.RLock()
 
 
 class NeedsReboot(Exception):
@@ -26,41 +30,156 @@ class NeedsReboot(Exception):
 
 
 # =========================================================================== estado / continuidade
-def load_state() -> dict:
-    p = work_dir() / STATE_FILE
+def _read_json(name: str) -> dict:
+    p = work_dir() / name
+    for cand in (p, p.with_suffix(".bak")):
+        try:
+            data = json.loads(cand.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            continue
+    return {}
+
+
+def _write_json(name: str, data: dict) -> None:
+    """Grava de forma atômica (arquivo temporário + troca): se a máquina reiniciar ou travar no meio,
+    o arquivo antigo continua inteiro. Antes, um arquivo cortado zerava os contadores e o programa
+    'esquecia' o que já tinha instalado."""
+    p = work_dir() / name
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+        if p.exists():
+            shutil.copyfile(p, p.with_suffix(".bak"))
+    except OSError:
+        pass
+    os.replace(tmp, p)
+
+
+def load_state() -> dict:
+    with _state_lock:
+        return _read_json(STATE_FILE)
 
 
 def save_state(state: dict) -> None:
-    (work_dir() / STATE_FILE).write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    with _state_lock:
+        _write_json(STATE_FILE, state)
+
+
+def update_state(**kv) -> dict:
+    with _state_lock:
+        st = load_state()
+        st.update(kv)
+        save_state(st)
+        return st
 
 
 def clear_state() -> None:
-    try:
-        (work_dir() / STATE_FILE).unlink()
-    except OSError:
-        pass
+    with _state_lock:
+        for suf in (".json", ".bak", ".tmp"):
+            try:
+                (work_dir() / STATE_FILE).with_suffix(suf).unlink()
+            except OSError:
+                pass
+
+
+# ---- histórico de instalações: NÃO é apagado entre provisionamentos.
+# Guarda o que já foi instalado com sucesso nesta máquina (Windows Update e Lenovo), para nunca
+# baixar e instalar de novo o mesmo item, mesmo que o fabricante/Windows continue oferecendo.
+def history() -> dict:
+    with _state_lock:
+        return _read_json(HISTORY_FILE)
+
+
+def history_add(kind: str, field: str, ids: list[str]) -> None:
+    if not ids:
+        return
+    with _state_lock:
+        h = _read_json(HISTORY_FILE)
+        bucket = h.setdefault(kind, {})
+        for i in ids:
+            rec = bucket.setdefault(i, {})
+            rec[field] = int(rec.get(field, 0)) + 1
+            rec["quando"] = time.strftime("%d/%m/%Y %H:%M")
+        _write_json(HISTORY_FILE, h)
+
+
+def history_skip(kind: str, max_tries: int = 2) -> list[str]:
+    """Itens que não devem ser instalados de novo: já instalados com sucesso, ou que falharam/repetiram
+    `max_tries` vezes."""
+    out = []
+    for i, rec in history().get(kind, {}).items():
+        if int(rec.get("ok", 0)) >= 1 or int(rec.get("try", 0)) >= max_tries:
+            out.append(i)
+    return out
+
+
+def clear_history() -> None:
+    with _state_lock:
+        for suf in (".json", ".bak", ".tmp"):
+            try:
+                (work_dir() / HISTORY_FILE).with_suffix(suf).unlink()
+            except OSError:
+                pass
+
+
+def _self_parts() -> tuple[str, str]:
+    if getattr(sys, "frozen", False):
+        return str(Path(sys.executable).resolve()), "--continuar"
+    return sys.executable, f'"{Path(sys.argv[0]).resolve()}" --continuar'
 
 
 def _self_command(arg: str) -> str:
-    if getattr(sys, "frozen", False):
-        return f'"{Path(sys.executable).resolve()}" {arg}'
-    return f'"{sys.executable}" "{Path(sys.argv[0]).resolve()}" {arg}'
+    exe, rest = _self_parts()
+    return f'"{exe}" {rest.replace("--continuar", arg)}'
+
+
+TASK_PS = r"""
+$ErrorActionPreference = 'Stop'
+$u = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$a = New-ScheduledTaskAction -Execute __EXE__ -Argument __ARGS__ -WorkingDirectory __DIR__
+$t = New-ScheduledTaskTrigger -AtLogOn -User $u
+$t.Delay = 'PT15S'
+$p = New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Highest
+$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
+     -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -Priority 4
+Register-ScheduledTask -TaskName __NAME__ -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
+Write-Output 'OK'
+"""
 
 
 def set_resume_on_boot() -> bool:
+    """Agenda a reabertura do programa no próximo logon.
+
+    Antes era usada a chave RunOnce do HKLM. Só que o Windows ESPERA os programas do RunOnce
+    fecharem antes de carregar a área de trabalho: com o programa aberto por horas, ficava tudo
+    preto, sem barra de tarefas e sem pesquisa, só com a janela do programa. Agora é uma tarefa
+    agendada 'ao fazer logon' (com privilégio de administrador e sem pedir UAC), que abre o
+    programa 15 s depois que a área de trabalho já carregou."""
     if not IS_WIN:
         return False
-    r = run(["reg", "add", RUNONCE_KEY, "/v", RUNONCE_NAME, "/t", "REG_SZ", "/d", _self_command("--continuar"), "/f"])
+    from .util import ps_quote
+    run(["reg", "delete", RUNONCE_KEY, "/v", RUNONCE_NAME, "/f"])
+    exe, args = _self_parts()
+    r = run_ps(TASK_PS.replace("__EXE__", ps_quote(exe)).replace("__ARGS__", ps_quote(args))
+               .replace("__DIR__", ps_quote(str(Path(exe).parent))).replace("__NAME__", ps_quote(TASK_NAME)),
+               timeout=90)
+    if "OK" in r.stdout:
+        run(["reg", "delete", RUN_KEY, "/v", RUNONCE_NAME, "/f"])
+        return True
+    log("Tarefa agendada indisponível (" + (r.stderr.strip().splitlines() or ["erro"])[-1][:160] +
+        "); usando a inicialização do Windows.", "warn")
+    # alternativa: chave Run (não bloqueia a área de trabalho como a RunOnce)
+    r = run(["reg", "add", RUN_KEY, "/v", RUNONCE_NAME, "/t", "REG_SZ", "/d", _self_command("--continuar"), "/f"])
     return r.returncode == 0
 
 
 def clear_resume_on_boot() -> None:
     if IS_WIN:
+        run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"])
         run(["reg", "delete", RUNONCE_KEY, "/v", RUNONCE_NAME, "/f"])
+        run(["reg", "delete", RUN_KEY, "/v", RUNONCE_NAME, "/f"])
 
 
 def reboot(seconds: int = 10, msg: str = "Reiniciando para continuar o provisionamento") -> None:
@@ -235,11 +354,14 @@ try {
     $skip = @(__SKIP__)
     $list = @()
     foreach ($u in $result.Updates) {
-        $id = [string]$u.Identity.UpdateID
-        # Já tentada 2 vezes neste provisionamento e voltou de novo: esconde para não entrar em loop
+        # chave = ID + revisao: as definicoes do Defender usam o mesmo ID com revisoes novas, e essas
+        # precisam continuar entrando
+        $id = [string]$u.Identity.UpdateID + '_' + [string]$u.Identity.RevisionNumber
+        # Ja instalada com sucesso (ou tentada 2 vezes) e oferecida de novo = deteccao quebrada
+        # (comum em driver de video/chipset quando o fabricante ja pos um mais novo). Nao repete.
         if ($skip -contains $id) {
-            L ('Ignorada (ja instalada antes e oferecida de novo): ' + $u.Title)
-            try { $u.IsHidden = $true } catch {}
+            L ('Ignorada (ja instalada antes; o Windows ofereceu de novo): ' + $u.Title)
+            if ($u.Type -eq 2) { try { $u.IsHidden = $true } catch {} }
             continue
         }
         # Drivers costumam marcar CanRequestUserInput mesmo instalando em silencio (o próprio Windows Update instala),
@@ -267,18 +389,23 @@ try {
             $dl = $session.CreateUpdateDownloader(); $dl.Updates = $coll
             try { $null = $dl.Download() } catch { L ('Falha no download: ' + $u.Title + ' (' + $_.Exception.Message + ')'); $fail++; continue }
         }
-        Write-Output ('R|done=' + [string]$u.Identity.UpdateID)
+        $key = [string]$u.Identity.UpdateID + '_' + [string]$u.Identity.RevisionNumber
+        Write-Output ('R|try=' + $key)
         P ($base + $step / 2) ("Instalando {0}/{1}: {2}" -f $i, $total, $title)
         $ins = $session.CreateUpdateInstaller(); $ins.Updates = $coll
         try { $ins.ForceQuiet = $true } catch {}
         try {
             $res = $ins.Install()
             $code = $res.GetUpdateResult(0).ResultCode
-            if ($code -eq 2 -or $code -eq 3) { $ok++; L ('OK: ' + $u.Title) } else { $fail++; L ('Falhou (codigo ' + $code + '): ' + $u.Title) }
-            if ($res.RebootRequired) { $reboot = $true }
+            if ($code -eq 2 -or $code -eq 3) {
+                $ok++; L ('OK: ' + $u.Title); Write-Output ('R|ok=' + $key)
+                if ($res.RebootRequired -or $res.GetUpdateResult(0).RebootRequired) { $reboot = $true }
+            } else { $fail++; L ('Falhou (codigo ' + $code + '): ' + $u.Title) }
         } catch { $fail++; L ('Erro ao instalar: ' + $u.Title + ' (' + $_.Exception.Message + ')') }
     }
-    try { if ((New-Object -ComObject Microsoft.Update.SystemInfo).RebootRequired) { $reboot = $true } } catch {}
+    # so reinicia se ALGO foi instalado nesta rodada e o Windows pede reinicio (antes um aviso de
+    # reinicio pendente antigo fazia reiniciar mesmo sem ter instalado nada)
+    if ($ok -gt 0) { try { if ((New-Object -ComObject Microsoft.Update.SystemInfo).RebootRequired) { $reboot = $true } } catch {} }
     P 100 ("Concluido: {0} instalada(s), {1} falha(s)" -f $ok, $fail)
     Write-Output ("R|pending={0}" -f $total)
     Write-Output ("R|installed={0}" -f $ok)
@@ -305,41 +432,29 @@ def _parse_wu_line(line: str, progress: Progress, result: dict) -> None:
     elif line.startswith("R|") and "=" in line:
         k, v = line[2:].split("=", 1)
         k, v = k.strip(), v.strip()
-        if k == "done":                      # lista de itens tentados (para não repetir em loop)
-            result.setdefault("done", []).append(v)
+        if k in ("try", "ok", "done"):       # itens tentados/instalados (para não repetir em loop)
+            result.setdefault("ok" if k == "ok" else "try", []).append(v)
         else:
             result[k] = int(v) if v.lstrip("-").isdigit() else v
     else:
         log(line)
 
 
-def re_guid(v: str) -> bool:
+def _safe_ids(ids: list[str]) -> list[str]:
     import re
-    return bool(re.fullmatch(r"[0-9a-fA-F-]{36}", v or ""))
-
-
-def _bump_attempts(key: str, ids: list[str]) -> None:
-    """Conta quantas vezes cada item foi instalado neste provisionamento (fica salvo entre reinícios)."""
-    if not ids:
-        return
-    state = load_state()
-    seen = state.setdefault(key, {})
-    for i in ids:
-        seen[i] = int(seen.get(i, 0)) + 1
-    save_state(state)
-
-
-def _repeated(key: str, limit: int = 2) -> list[str]:
-    return [i for i, n in load_state().get(key, {}).items() if int(n) >= limit]
+    return [i for i in ids if re.fullmatch(r"[0-9A-Za-z_.\-]{1,80}", i or "")]
 
 
 def windows_update_round(progress: Progress, cancel: threading.Event, only_drivers: bool = False) -> dict:
     result: dict = {}
-    skip = ",".join(f"'{i}'" for i in _repeated("wu_attempts") if re_guid(i))
+    skip = ",".join(f"'{i}'" for i in _safe_ids(history_skip("wu")))
     script = (WU_PS.replace("__ONLY_DRIVERS__", "$true" if only_drivers else "$false")
               .replace("__SKIP__", skip))
-    rc = stream_ps(script, lambda ln: _parse_wu_line(ln, progress, result), timeout=4 * 3600, cancel=cancel)
-    _bump_attempts("wu_attempts", result.get("done", []))
+    try:
+        rc = stream_ps(script, lambda ln: _parse_wu_line(ln, progress, result), timeout=4 * 3600, cancel=cancel)
+    finally:
+        history_add("wu", "try", result.get("try", []))
+        history_add("wu", "ok", result.get("ok", []))
     if cancel.is_set():
         raise RuntimeError("Cancelado")
     if rc != 0 and result.get("error"):
@@ -365,8 +480,7 @@ def windows_update(progress: Progress, cancel: threading.Event, max_rounds: int 
     """Abre o Windows Update nas Configurações, procura e instala TUDO (inclusive drivers).
     Repete a busca até não sobrar nada; o que falhar é tentado de novo. Se precisar reiniciar,
     levanta NeedsReboot e o programa continua sozinho depois."""
-    state = load_state()
-    rounds_done = int(state.get("wu_rounds", 0))
+    rounds_done = int(load_state().get("wu_rounds", 0))
     if rounds_done >= 15:
         log("Limite de 15 ciclos do Windows Update atingido — seguindo para a próxima etapa.", "warn")
         return "Limite de ciclos atingido; confira o Windows Update manualmente."
@@ -383,12 +497,12 @@ def windows_update(progress: Progress, cancel: threading.Event, max_rounds: int 
         if res.get("pending", 0) == 0:
             progress(100, "Sistema totalmente atualizado")
             log("Nenhuma atualização pendente. Windows totalmente atualizado.", "ok")
-            show_windows_update(scan=True)   # a tela também mostra 'Você está atualizado'
+            # sem 'Verificar atualizações' na tela: a verificação do próprio Windows instalava drivers
+            # por conta própria em segundo plano, por cima dos do fabricante (driver indo e voltando)
+            show_windows_update(scan=False)
             return "Sistema totalmente atualizado."
-        if res.get("reboot"):
-            state = load_state()
-            state["wu_rounds"] = rounds_done + rnd
-            save_state(state)
+        if res.get("reboot") and res.get("installed", 0) > 0:
+            update_state(wu_rounds=rounds_done + rnd)
             raise NeedsReboot("Atualizações instaladas; é preciso reiniciar para continuar.")
         if res.get("installed", 0) == 0:
             # nada entrou nesta rodada (ex.: a tela do Windows Update estava instalando ao mesmo tempo):

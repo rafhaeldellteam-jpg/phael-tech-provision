@@ -27,7 +27,8 @@ STEP_ORDER = ["power", "office", "wu", "vendor", "finalize"]
 # os drivers do fabricante só começam depois que o Windows Update terminar.
 STEP_GROUPS = [["power"], ["office", "wu"], ["vendor"], ["finalize"]]
 MAX_REBOOTS = 6          # no máximo 6 reinícios por provisionamento (proteção contra loop)
-MAX_VENDOR_REBOOTS = 2   # a etapa do fabricante pede reinício no máximo 2 vezes
+MAX_VENDOR_REBOOTS = {"hp": 1}   # HP Image Assistant: 1 reinício (ele reinstala o mesmo SoftPaq com frequência)
+MAX_VENDOR_REBOOTS_DEFAULT = 2   # Dell / Lenovo / outros: no máximo 2 reinícios pela etapa do fabricante
 STEP_TITLES = {"power": "Energia", "office": "Microsoft Office", "wu": "Windows Update",
                "vendor": "Drivers do fabricante", "finalize": "Finalização"}
 
@@ -46,7 +47,33 @@ class Api:
         self._inv_lock = threading.Lock()
         self._sensors = maintenance.SensorReader()
         self._continuing = "--continuar" in sys.argv
+        self._provisioning = False        # liga a vigia da área de trabalho só durante o provisionamento
         log.add_sink(lambda ts, level, msg: self._emit({"t": "log", "ts": ts, "level": level, "msg": msg}))
+        threading.Thread(target=self._shell_watchdog, daemon=True).start()
+
+    def _shell_watchdog(self) -> None:
+        """Enquanto o provisionamento roda, garante que a área de trabalho (explorer.exe) está aberta.
+        Ao instalar driver de vídeo o Windows reinicia a tela e às vezes o explorer não volta:
+        ficava tudo preto, sem barra de tarefas e sem pesquisa, só com o programa aberto."""
+        if not IS_WIN:
+            return
+        misses = 0
+        while True:
+            time.sleep(10)
+            if not self._provisioning:
+                misses = 0
+                continue
+            if maintenance_shell_running():
+                misses = 0
+                continue
+            misses += 1
+            if misses >= 2:             # 20 s sem explorer (ele mesmo costuma voltar em poucos segundos)
+                misses = 0
+                log("A área de trabalho do Windows (explorer) não estava aberta — reabrindo.", "warn")
+                try:
+                    subprocess.Popen(["explorer.exe"], cwd=os.environ.get("SystemRoot", r"C:\Windows"))
+                except OSError as e:
+                    log(f"Não consegui reabrir a área de trabalho: {e}", "error")
 
     # ------------------------------------------------------------------ eventos -> interface
     def _attach(self, window) -> None:
@@ -72,7 +99,11 @@ class Api:
 
     # ------------------------------------------------------------------ inicialização
     def boot(self) -> dict:
-        state = provision.load_state() if self._continuing else {}
+        state = provision.load_state()
+        if not state.get("pending"):
+            state = {}
+            if self._continuing:
+                provision.clear_resume_on_boot()   # nada pendente: a reabertura automática não serve mais
         return {
             "app": APP_NAME, "version": APP_VERSION, "admin": is_admin(), "continuing": bool(state),
             "state": state,
@@ -160,6 +191,9 @@ class Api:
     def start_provision(self, opts: dict) -> dict:
         if not self._busy.acquire(blocking=False):
             return {"ok": False, "msg": "Já existe uma tarefa em andamento."}
+        if self._maint_busy.locked():
+            self._busy.release()
+            return {"ok": False, "msg": "Aguarde a limpeza/reparo terminar antes de provisionar."}
         self._cancel.clear()
         steps = [s for s in STEP_ORDER if opts.get("steps", {}).get(s)]
         if not steps:
@@ -193,12 +227,14 @@ class Api:
     def _provision_worker(self, steps: list[str], opts: dict) -> None:
         results: dict[str, str] = {}      # ok | err | reboot
         reboot_msgs: list[str] = []
+        self._provisioning = True
         try:
             log(f"Provisionamento iniciado: {', '.join(STEP_TITLES[s] for s in steps)}.")
             for s in STEP_ORDER:
                 if s not in steps and not opts.get("resumed"):
                     self._emit({"t": "step", "key": s, "status": "skip", "pct": 0, "text": "Não selecionado"})
-            opts = dict(opts, _parallel=steps)
+            # _plan = etapas do provisionamento ORIGINAL (continua igual depois de reiniciar)
+            opts = dict(opts, _parallel=steps, _plan=opts.get("_plan") or steps)
             for group in STEP_GROUPS:
                 keys = [k for k in group if k in steps]
                 if not keys or self._cancel.is_set():
@@ -244,6 +280,7 @@ class Api:
             log("Erro inesperado: " + traceback.format_exc(), "error")
             self._emit({"t": "done", "ok": False, "msg": "Erro inesperado — veja o log."})
         finally:
+            self._provisioning = False
             self._busy.release()
 
     def _run_one(self, key: str, opts: dict, results: dict, reboot_msgs: list) -> None:
@@ -281,16 +318,14 @@ class Api:
             return provision.windows_update(prog, self._cancel)
         if key == "vendor":
             # se o Windows Update fez parte do provisionamento, os drivers do catálogo Microsoft já entraram
-            wu_together = "wu" in opts.get("_parallel", [])
+            wu_together = "wu" in opts.get("_plan", opts.get("_parallel", []))
             try:
                 return drivers.vendor_drivers(vendor, prog, self._cancel, opts.get("include_bios", False),
                                               wu_fallback=not wu_together, inv=inv)
             except NeedsReboot:
-                st = provision.load_state()
-                n = int(st.get("vendor_reboots", 0)) + 1
-                st["vendor_reboots"] = n
-                provision.save_state(st)
-                if n > MAX_VENDOR_REBOOTS:
+                n = int(provision.load_state().get("vendor_reboots", 0)) + 1
+                provision.update_state(vendor_reboots=n)
+                if n > MAX_VENDOR_REBOOTS.get(vendor, MAX_VENDOR_REBOOTS_DEFAULT):
                     log("O fabricante pediu reinício de novo; para não entrar em loop, a etapa termina aqui.", "warn")
                     return "Drivers do fabricante aplicados (reinicie ao final)."
                 raise
@@ -325,6 +360,7 @@ class Api:
                 log("Reinicialização automática cancelada. O provisionamento continua quando você reiniciar.", "warn")
                 return
         self._emit({"t": "countdown", "s": 0, "msg": "Reiniciando…"})
+        self._provisioning = False     # o explorer fecha ao reiniciar: a vigia não deve reabri-lo
         provision.reboot(3, msg)
 
     # ------------------------------------------------------------------ aplicativos
@@ -420,6 +456,9 @@ class Api:
 
     # ------------------------------------------------------------------ manutenção
     def maintenance(self, action: str) -> dict:
+        if action in ("temp", "wu", "components", "all") and self._provisioning:
+            # parar o Windows Update / apagar temporários no meio da instalação quebrava as atualizações
+            return {"ok": False, "msg": "Aguarde o provisionamento terminar para fazer a limpeza."}
         if not self._maint_busy.acquire(blocking=False):
             return {"ok": False, "msg": "Aguarde a tarefa de manutenção atual terminar."}
 
@@ -461,6 +500,8 @@ class Api:
         return fmt_bytes(maintenance.free_space())
 
     def repair(self, keys: list[str]) -> dict:
+        if self._provisioning:
+            return {"ok": False, "msg": "Aguarde o provisionamento terminar para rodar o reparo (DISM/SFC)."}
         if not self._maint_busy.acquire(blocking=False):
             return {"ok": False, "msg": "Aguarde a tarefa de manutenção atual terminar."}
         self._cancel.clear()
@@ -606,6 +647,17 @@ class Api:
 
     def _shutdown(self) -> None:
         self._sensors.stop()
+
+
+def maintenance_shell_running() -> bool:
+    try:
+        import psutil
+        for p in psutil.process_iter(["name"]):
+            if (p.info["name"] or "").lower() == "explorer.exe":
+                return True
+        return False
+    except Exception:
+        return True     # sem como verificar: não mexe
 
 
 # =========================================================================== janela

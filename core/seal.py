@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from .provision import clear_resume_on_boot, clear_state, load_state, write_report
+from .provision import clear_history, clear_resume_on_boot, clear_state, load_state, write_report
 from .util import CREATE_NO_WINDOW, IS_WIN, log, run, run_ps
 
 SYSPREP = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "Sysprep" / "sysprep.exe"
@@ -128,6 +128,12 @@ def seal(generalize: bool, action: str, inventory: dict | None, on_line: Callabl
     on_line("Limpando a continuação automática do programa…")
     clear_resume_on_boot()
     clear_state()
+    on_line("Reexibindo no Windows Update os drivers que o programa tinha ocultado…")
+    if IS_WIN:
+        run_ps("$ErrorActionPreference='SilentlyContinue'; $s = New-Object -ComObject Microsoft.Update.Session; "
+               "$r = $s.CreateUpdateSearcher().Search(\"IsHidden=1 and Type='Driver'\"); "
+               "foreach ($u in $r.Updates) { $u.IsHidden = $false }", timeout=180)
+    clear_history()
     # o Sysprep do modo de auditoria abre sozinho; com ele aberto, um segundo Sysprep falha
     if IS_WIN:
         run(["taskkill", "/IM", "sysprep.exe", "/F"], timeout=30)

@@ -122,10 +122,20 @@ Para sumir o aviso do SmartScreen em qualquer computador, é preciso um certific
 
 ## Proteções contra repetição e loop de reinício
 
-- **Windows Update e Lenovo:** o programa guarda cada atualização/driver já tentado em `estado.json`. Se o Windows ou o catálogo da Lenovo oferecer de novo o mesmo item depois de instalado, ele é ignorado (e ocultado no Windows Update) em vez de ser baixado outra vez.
-- **Lenovo:** pacotes que forçam reinício sozinhos (BIOS/firmware com RebootType 1/5) só entram com "Incluir BIOS e firmware". O reinício só é pedido quando um pacote que precisa dele foi instalado com sucesso.
-- **Limite de reinícios:** no máximo 6 reinícios automáticos no provisionamento inteiro e 2 por causa dos drivers do fabricante. Passando disso, ele conclui as etapas e avisa para reiniciar no final.
-- **Configurações do Windows Update** abrem só para acompanhar. Quem instala é o programa, para não haver duas instalações ao mesmo tempo.
+- **Histórico de instalações** (`C:\ProgramData\PhaelTechProvision\historico-instalacoes.json`): tudo o que o Windows Update e a Lenovo instalaram com sucesso nesta máquina fica anotado e **não é instalado de novo**, mesmo que seja oferecido outra vez (detecção quebrada, comum em driver de vídeo e chipset). Um item que falha 2 vezes também para de ser tentado. O histórico não se perde entre provisionamentos e é apagado ao selar.
+- **Reinício só quando precisa:** o Windows Update e a Lenovo só pedem reinício se instalaram alguma coisa naquela rodada. Um aviso antigo de "reinício pendente" não faz mais a máquina reiniciar à toa.
+- **Pacote offline do modelo:** é instalado uma vez por provisionamento, e não a cada reinício.
+- **Lenovo:** pacotes que forçam reinício sozinhos (BIOS/firmware) só entram com "Incluir BIOS e firmware".
+- **Limites:** no máximo 6 reinícios automáticos no provisionamento inteiro. A etapa do fabricante reinicia no máximo 2 vezes (HP: 1). Passando disso, ela conclui e avisa para reiniciar no final.
+- **Estado gravado com segurança:** o `estado.json` é gravado de forma atômica e com cópia de segurança. Um desligamento no meio da gravação não zera mais os contadores.
+- **Configurações do Windows Update** abrem só para acompanhar. Quem instala é o programa, e ele não dispara a verificação da tela (ela instalava drivers por conta própria em segundo plano).
+- **Limpeza e Reparo** ficam bloqueados enquanto o provisionamento roda (parar o Windows Update no meio quebrava a instalação).
+
+## Continuação após reiniciar (sem tela preta)
+
+O programa volta sozinho depois de reiniciar por uma **tarefa agendada** ("PhaelTechProvision-Continuar", ao fazer logon, como administrador e sem pedir UAC), 15 s depois que a área de trabalho carrega.
+Antes era usada a chave RunOnce, e o Windows segura a área de trabalho até os programas do RunOnce fecharem: ficava tudo preto, sem barra de tarefas e sem pesquisa.
+Durante o provisionamento há também uma vigia: se a área de trabalho (explorer) sumir por mais de 20 s, por exemplo depois de instalar um driver de vídeo, ela é reaberta sozinha.
 
 ## Energia ao vivo
 

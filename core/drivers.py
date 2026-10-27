@@ -168,7 +168,7 @@ try {
     $forced = @($todo | Where-Object { $_.RebootType -in 1,5 -and $_.Installer.Command -notmatch 'winuptp|Flash\.cmd' })
     foreach ($f in $forced) { L ('Ignorado (reinicia a maquina sozinho durante a instalacao): ' + $f.Title) }
     $todo = @($todo | Where-Object { $forced -notcontains $_ })
-    # Já instalado neste provisionamento e oferecido de novo depois de reiniciar = detecção do pacote falha.
+    # Já instalado antes nesta máquina e oferecido de novo depois de reiniciar = detecção do pacote falha.
     # Não instala de novo (era isso que fazia baixar os mesmos drivers e reiniciar várias vezes).
     $again = @($todo | Where-Object { $skip -contains $_.ID })
     foreach ($a in $again) { L ('Ja instalado antes neste provisionamento, nao repete: ' + $a.Title) }
@@ -180,14 +180,14 @@ try {
     foreach ($u in $todo) {
         $i++
         $base = 5 + 90 * ($i - 1) / $todo.Count
-        Write-Output ('R|done=' + $u.ID)
+        Write-Output ('R|try=' + $u.ID)
         P $base ("Baixando {0}/{1}: {2}" -f $i, $todo.Count, $u.Title)
         try { Save-LSUpdate -Package $u -Path $dl -WarningAction SilentlyContinue | Out-Null } catch { L ('Falha no download: ' + $u.Title); $fail++; continue }
         P ($base + 45 / $todo.Count) ("Instalando {0}/{1}: {2}" -f $i, $todo.Count, $u.Title)
         $wv = $null
         $out = Install-LSUpdate -Package $u -Path $dl -SaveBIOSUpdateInfoToRegistry -WarningVariable wv -WarningAction SilentlyContinue
         if ($wv -and $wv.Count -gt 0) { $fail++; L ('Falhou: ' + $u.Title + ' - ' + ($wv | Select-Object -First 1)); continue }
-        $ok++; L ('OK: ' + $u.Title)
+        $ok++; L ('OK: ' + $u.Title); Write-Output ('R|ok=' + $u.ID)
         # só pede reinício quem instalou de verdade e precisa (3 = reiniciar, 4 = desligar)
         if ($u.RebootType -in 3,4 -or ($out -match 'BIOS UPDATE SUCCESS')) { $reboot = $true }
     }
@@ -205,7 +205,7 @@ try {
 
 
 def lenovo_update(progress: Progress, cancel: threading.Event, include_bios: bool = False) -> str:
-    from .provision import _bump_attempts, _parse_wu_line, _repeated
+    from .provision import _parse_wu_line, _safe_ids, history_add, history_skip
     mod = find_resource("LSUClient")
     if not mod:
         raise FileNotFoundError("Módulo LSUClient não encontrado na pasta Recursos.")
@@ -213,9 +213,12 @@ def lenovo_update(progress: Progress, cancel: threading.Event, include_bios: boo
     script = (LENOVO_PS.replace("__MOD__", ps_quote(str(mod)))
               .replace("__DL__", ps_quote(str(sub_work_dir("lenovo"))))
               .replace("__BIOS__", "$true" if include_bios else "$false")
-              .replace("__SKIP__", ",".join(ps_quote(i) for i in _repeated("lenovo_attempts", 1))))
-    stream_ps(script, lambda ln: _parse_wu_line(ln, progress, result), timeout=3 * 3600, cancel=cancel)
-    _bump_attempts("lenovo_attempts", result.get("done", []))
+              .replace("__SKIP__", ",".join(ps_quote(i) for i in _safe_ids(history_skip("lenovo")))))
+    try:
+        stream_ps(script, lambda ln: _parse_wu_line(ln, progress, result), timeout=3 * 3600, cancel=cancel)
+    finally:
+        history_add("lenovo", "try", result.get("try", []))
+        history_add("lenovo", "ok", result.get("ok", []))
     if cancel.is_set():
         raise RuntimeError("Cancelado")
     if result.get("error"):
@@ -223,7 +226,7 @@ def lenovo_update(progress: Progress, cancel: threading.Event, include_bios: boo
     if result.get("pending", 0) == 0:
         return "Nenhum driver Lenovo pendente."
     msg = f"{result.get('installed', 0)} instalado(s), {result.get('failed', 0)} falha(s)"
-    if result.get("reboot"):
+    if result.get("reboot") and result.get("installed", 0) > 0:
         raise NeedsReboot("Drivers Lenovo instalados; reinicialização necessária.")
     return msg
 
@@ -307,7 +310,7 @@ def windows_update_drivers(progress: Progress, cancel: threading.Event) -> str:
     if res.get("pending", 0) == 0:
         return "Nenhum driver pendente no Windows Update."
     msg = f"{res.get('installed', 0)} driver(s) instalado(s), {res.get('failed', 0)} falha(s)"
-    if res.get("reboot"):
+    if res.get("reboot") and res.get("installed", 0) > 0:
         raise NeedsReboot("Drivers instalados; reinicialização necessária.")
     return msg
 
@@ -325,11 +328,16 @@ def vendor_drivers(vendor: str, progress: Progress, cancel: threading.Event, inc
     ele é instalado primeiro (funciona sem internet); depois a ferramenta do fabricante completa.
     Para Positivo/outros usa o catálogo de drivers do Windows Update."""
     offline_msg = ""
-    if inv:
+    from .provision import load_state, update_state
+    if inv and load_state().get("pack_done"):
+        offline_msg = "Pacote offline do modelo já instalado neste provisionamento."
+        log(offline_msg)
+    elif inv:
         try:
             from . import driverpacks
             if driverpacks.local_status(inv)["available"]:
                 offline_msg = driverpacks.install_pack(inv, progress, cancel)
+                update_state(pack_done=True)    # não reinstala o pacote inteiro a cada reinício
         except Exception as e:
             if cancel.is_set():
                 raise
