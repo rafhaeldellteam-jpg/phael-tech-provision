@@ -269,14 +269,67 @@ def apply(new_exe: Path) -> Path:
     return target
 
 
+def _clean_env() -> dict:
+    """Ambiente para abrir a versão nova como um programa INDEPENDENTE.
+
+    O .exe novo fica no mesmo caminho do antigo. O PyInstaller compara esse caminho com a variável
+    _PYI_ARCHIVE_FILE herdada e, sendo igual, acha que é um subprocesso do programa antigo: reaproveita
+    a pasta temporária dele (_MEI…), que é apagada quando o antigo fecha — e a versão nova morria sem
+    abrir janela nenhuma. Era isso que deixava só o '.old' e não abria nada."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.upper().startswith(("_PYI_", "_MEI", "PYI_"))}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    mei = getattr(sys, "_MEIPASS", "")
+    if mei and "PATH" in env:
+        env["PATH"] = os.pathsep.join(p for p in env["PATH"].split(os.pathsep)
+                                      if p and not p.lower().startswith(mei.lower()))
+    return env
+
+
+RELAUNCH_TASK = "PhaelTechProvision-Reabrir"
+
+
+def _launch_by_task(target: Path, arg: str) -> bool:
+    """Alternativa: o Agendador de Tarefas abre o .exe (processo totalmente separado deste)."""
+    r = run_ps(f"""
+$ErrorActionPreference = 'Stop'
+$u = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$a = New-ScheduledTaskAction -Execute {ps_quote(str(target))} -Argument {ps_quote(arg)} -WorkingDirectory {ps_quote(str(target.parent))}
+$p = New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Highest
+$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -Priority 4
+Register-ScheduledTask -TaskName '{RELAUNCH_TASK}' -Action $a -Principal $p -Settings $s -Force | Out-Null
+Start-ScheduledTask -TaskName '{RELAUNCH_TASK}'
+Write-Output 'OK'
+""", timeout=60)
+    return "OK" in r.stdout
+
+
 def launch(target: Path) -> None:
-    """Abre o .exe novo como um processo independente, avisando quais processos ele deve esperar
-    fechar antes de criar a janela (este e o lançador do PyInstaller, que é o processo pai)."""
+    """Abre o .exe novo como processo independente. Ele espera este fechar, apaga o '.old' e mostra a
+    janela. Se o processo novo não ficar de pé, usa o Agendador de Tarefas como alternativa."""
+    import time
     DETACHED = 0x00000008
     NEW_GROUP = 0x00000200
+    BREAKAWAY = 0x01000000
     arg = f"--apos-atualizar={os.getpid()},{os.getppid()}"
-    subprocess.Popen([str(target), arg], cwd=str(target.parent), close_fds=True,
-                     creationflags=DETACHED | NEW_GROUP)
+    proc = None
+    for flags in (DETACHED | NEW_GROUP | BREAKAWAY, DETACHED | NEW_GROUP):
+        try:
+            proc = subprocess.Popen([str(target), arg], cwd=str(target.parent), close_fds=True,
+                                    env=_clean_env(), creationflags=flags)
+            break
+        except OSError:
+            continue
+    time.sleep(2.5)
+    if proc is None or proc.poll() is not None:
+        log("A versão nova não abriu direto; abrindo pelo Agendador de Tarefas…", "warn")
+        _launch_by_task(target, arg)
+
+
+def remove_relaunch_task() -> None:
+    if IS_WIN:
+        run_ps(f"Unregister-ScheduledTask -TaskName '{RELAUNCH_TASK}' -Confirm:$false -ErrorAction SilentlyContinue",
+               timeout=30)
 
 
 def wait_previous_instance(argv: list[str], webview_dir: Path, limit: float = 25.0) -> None:
@@ -318,6 +371,8 @@ def cleanup_old_copies() -> None:
         return
     import time
     me = Path(sys.executable).resolve()
+    if any(me.parent.glob(me.name + "*.old")):
+        remove_relaunch_task()
     for _ in range(24):
         left = 0
         for f in me.parent.glob(me.name + "*.old"):
@@ -326,6 +381,7 @@ def cleanup_old_copies() -> None:
             except OSError:
                 left += 1
         if not left:
+            log("Versão antiga removida.", "ok") if _ > 0 else None
             return
         time.sleep(5)
 
