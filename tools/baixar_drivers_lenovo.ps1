@@ -1,4 +1,4 @@
-# Baixa do catálogo OFICIAL da Lenovo os drivers de rede (Wi-Fi e cabo) mais recentes e os extrai
+# Baixa do catálogo OFICIAL da Lenovo os drivers de Wi-Fi mais recentes (só Wi-Fi, sem rede cabeada) e os extrai
 # em Recursos\Drivers Lenovo\<família>\ (arquivos .inf, instalados depois com pnputil).
 # Roda no GitHub Actions ao gerar o .exe, então cada versão do programa sai com os drivers mais novos.
 #
@@ -24,7 +24,7 @@ $modelos = @(
     '30GS','30GT','30FM','30E0','30DH'           # ThinkStation P3 / P360 / P350 (Realtek Ethernet)
 )
 # Categorias do catálogo que interessam (texto do catálogo da Lenovo)
-$cats = 'Networking|Wireless LAN|LAN|Ethernet'
+$cats = 'Wireless LAN|WLAN|Wi-?Fi|Networking'
 
 $work = Join-Path ([IO.Path]::GetTempPath()) 'lenovo-rede'
 New-Item -ItemType Directory -Force -Path $work | Out-Null
@@ -73,7 +73,9 @@ foreach ($loc in $achados.Keys) {
     if (-not $titulo) { $titulo = [string]$pk.name }
     $arq = [string]$pk.Files.Installer.File.Name
     $extr = [string]$pk.ExtractCommand
-    if (-not $arq -or $titulo -match 'WAN|5G|LTE|Bluetooth|Firmware|Utility|Dock') { continue }
+    # só Wi-Fi: título precisa falar de rede sem fio, e nada de cabo, celular (WWAN), Bluetooth ou dock
+    if (-not $arq -or $titulo -notmatch 'Wireless|WLAN|Wi-?Fi|FastConnect' -or
+        $titulo -match 'WWAN|Wireless WAN|5G|LTE|Bluetooth|Firmware|Utility|Dock|Ethernet|Onboard LAN|PRO1000') { continue }
     $data = [string]$pk.ReleaseDate
     $pacotes += [pscustomobject]@{
         Familia = Familia $titulo; Titulo = $titulo; Versao = [string]$pk.version; Data = $data
@@ -115,7 +117,8 @@ function DriverVer($inf) {
 $infs = Get-ChildItem $stage -Recurse -Filter *.inf | Where-Object {
     $_.FullName -notmatch '\\(x86|Win32|32bit|Win7|Win8|Win81|ARM64)\\' -and
     # placas de servidor/estação (10-100 Gb, Thunderbolt em rede) não interessam para notebook/desktop
-    $_.BaseName -notmatch '^(mlx\d|i40e|ixs|ixt|icea|TbtP2p|TbtHost|amdusb4net)' -and
+    # placas de rede cabeada (Intel e1x/i2xx, Broadcom, Aquantia, servidor) e Thunderbolt ficam de fora
+    $_.BaseName -notmatch '^(e1|e2|b57|bxnd|aqnic|rt6|rtux|rtvn|mlx\d|i40e|ixs|ixt|icea|TbtP2p|TbtHost|amdusb4net|PieExtension)' -and
     (Select-String -Path $_.FullName -Pattern '^\s*Class\s*=\s*Net\s*$' -Quiet)
 }
 $melhores = $infs | ForEach-Object { $dv = DriverVer $_.FullName; $_ | Add-Member -NotePropertyName Dv -NotePropertyValue $dv -PassThru } |

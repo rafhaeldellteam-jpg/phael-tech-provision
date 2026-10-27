@@ -304,26 +304,75 @@ Write-Output 'OK'
     return "OK" in r.stdout
 
 
-def launch(target: Path) -> None:
-    """Abre o .exe novo como processo independente. Ele espera este fechar, apaga o '.old' e mostra a
-    janela. Se o processo novo não ficar de pé, usa o Agendador de Tarefas como alternativa."""
+MARKER = "reabertura.txt"
+
+
+def _marker() -> Path:
+    from .util import work_dir
+    return work_dir() / MARKER
+
+
+def mark_started(argv: list[str]) -> None:
+    """Chamado pela versão NOVA logo no começo, antes de tudo: avisa a versão antiga que abriu."""
+    if not any(a.startswith("--apos-atualizar") for a in argv):
+        return
+    try:
+        _marker().write_text(f"{os.getpid()}\n", encoding="utf-8")
+        log(f"Versão nova aberta automaticamente após a atualização (processo {os.getpid()}).", "ok")
+    except OSError:
+        pass
+
+
+def _wait_marker(proc, seconds: float) -> bool:
     import time
+    end = time.time() + seconds
+    while time.time() < end:
+        if _marker().exists():
+            return True
+        if proc is not None and proc.poll() is not None:
+            # o processo novo fechou sem dar sinal: espera um pouco pelo arquivo e desiste
+            time.sleep(1.0)
+            return _marker().exists()
+        time.sleep(0.3)
+    return _marker().exists()
+
+
+def launch(target: Path) -> bool:
+    """Abre o .exe novo e SÓ deixa este programa fechar depois que a versão nova confirmar que abriu
+    (ela grava 'reabertura.txt' logo no começo). Se não confirmar, tenta pelo Agendador de Tarefas,
+    que abre o programa exatamente como um clique duplo (ambiente novo, sem ligação com este)."""
     DETACHED = 0x00000008
     NEW_GROUP = 0x00000200
     BREAKAWAY = 0x01000000
     arg = f"--apos-atualizar={os.getpid()},{os.getppid()}"
+    try:
+        _marker().unlink(missing_ok=True)
+    except OSError:
+        pass
     proc = None
     for flags in (DETACHED | NEW_GROUP | BREAKAWAY, DETACHED | NEW_GROUP):
         try:
             proc = subprocess.Popen([str(target), arg], cwd=str(target.parent), close_fds=True,
                                     env=_clean_env(), creationflags=flags)
+            log(f"Versão nova iniciada (processo {proc.pid}); aguardando ela confirmar…")
             break
+        except OSError as e:
+            log(f"Não foi possível iniciar a versão nova (flags {flags:#x}): {e}", "warn")
+    # o .exe tem ~250 MB para descompactar: em HD comum pode levar uns 30 s
+    if _wait_marker(proc, 60):
+        return True
+    log("A versão nova não confirmou que abriu; abrindo pelo Agendador de Tarefas…", "warn")
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.kill()
         except OSError:
-            continue
-    time.sleep(2.5)
-    if proc is None or proc.poll() is not None:
-        log("A versão nova não abriu direto; abrindo pelo Agendador de Tarefas…", "warn")
-        _launch_by_task(target, arg)
+            pass
+    ok = _launch_by_task(target, arg)
+    log("Agendador de Tarefas: " + ("tarefa iniciada." if ok else "falhou."), "info" if ok else "error")
+    if ok and _wait_marker(None, 60):
+        return True
+    log("A versão nova não abriu sozinha. Abra o PhaelTechProvision.exe de novo.", "error")
+    return False
 
 
 def remove_relaunch_task() -> None:

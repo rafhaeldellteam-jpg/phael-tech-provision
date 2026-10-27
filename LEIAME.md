@@ -49,7 +49,7 @@ Recursos\
   Programas\                 Chrome, AnyDesk, WinRAR, Firefox, Brave, CrystalDiskInfo, CPU-Z, DDU, Lenovo System Update
   Drivers Dell\              pacote offline Dell (Wi-Fi, Bluetooth, Intel HID); pode receber o instalador do Dell Command Update
   Drivers HP\                pacote offline HP; pode receber o hp-hpia-x.y.z.exe
-  Drivers Lenovo\            drivers de rede Lenovo (.inf) — baixados do catálogo oficial a cada versão
+  Drivers Lenovo\            drivers de Wi-Fi Lenovo (.inf) — baixados do catálogo oficial a cada versão
   portcode Lenovo\           Portcode.reg
   LSUClient\                 módulo de drivers Lenovo (licença MIT)
   LibreHardwareMonitorLib.dll, HidSharp.dll   sensores de temperatura
@@ -90,6 +90,8 @@ Se houver versão maior que a dele, mostra um aviso, conta 15 s e se atualiza so
 baixa o `PhaelTechProvision.exe` da release, confere o SHA-256, troca o próprio arquivo e reabre.
 Ele não atualiza no meio de um provisionamento, e sem internet simplesmente segue na versão atual.
 Também dá para clicar no número da versão, no canto inferior esquerdo, para procurar atualização na hora.
+
+**Como a versão nova abre sozinha:** o programa antigo abre o .exe novo e só fecha depois que ele confirma que abriu (grava `reabertura.txt` no ProgramData). Se não confirmar em 60 s, tenta pelo Agendador de Tarefas. O `.exe.old` é apagado pela versão nova.
 
 **Para publicar uma versão nova:** GitHub → *Releases* → *Draft a new release* → crie a tag (ex.: `v2.0.1`) → *Publish release*.
 O GitHub Actions (`.github/workflows/release.yml`) gera o .exe no Windows com essa versão e anexa à release.
@@ -142,10 +144,9 @@ Durante o provisionamento há também uma vigia: se a área de trabalho (explore
 
 Em notebooks, o topo da janela e o cartão Bateria (aba Hardware) mostram a cada 2 s se a máquina está **no carregador** ou **na bateria**, com a porcentagem e o tempo restante. Em desktops o indicador não aparece.
 
-## Drivers de rede Lenovo embutidos
+## Drivers de Wi-Fi Lenovo embutidos
 
-A cada versão, o GitHub baixa do catálogo oficial da Lenovo os drivers de rede mais novos (Wi-Fi Intel, Realtek, MediaTek e Qualcomm/Atheros; cabo Intel e Broadcom), usando cerca de 50 modelos ThinkPad, ThinkBook, V, ThinkCentre e ThinkStation como referência.
+A cada versão, o GitHub baixa do catálogo oficial da Lenovo os drivers de **Wi-Fi** mais novos (Intel, Realtek, MediaTek e Qualcomm/Atheros), usando cerca de 50 modelos ThinkPad, ThinkBook, V, ThinkCentre e ThinkStation como referência. Drivers de rede cabeada não entram.
 Ficam só as pastas dos drivers (.inf), na versão mais nova de cada um, dentro de `Recursos\Drivers Lenovo`. O script é o `tools/baixar_drivers_lenovo.ps1`.
-- **No provisionamento:** se a máquina é Lenovo e a placa de rede está sem driver, ele instala esses drivers logo na primeira etapa, antes do Windows Update, que precisa de internet.
-- **Na aba Drivers:** botão "Rede Lenovo (offline)". O `pnputil` só instala o que combina com o hardware da máquina.
-- O driver de rede cabeada Realtek não está no pacote porque já vem no Windows 10/11.
+- **No provisionamento:** se a máquina é Lenovo e a placa Wi-Fi está sem driver, ele instala esses drivers logo na primeira etapa, antes do Windows Update, que precisa de internet.
+- **Na aba Drivers:** botão "Wi-Fi Lenovo (offline)". O `pnputil` só instala o que combina com o hardware da máquina.

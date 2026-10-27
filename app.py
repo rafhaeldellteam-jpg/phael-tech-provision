@@ -636,7 +636,9 @@ class Api:
                 closer.join(3)                        # fecha a janela se der…
                 updater.kill_own_children()           # …e encerra o navegador interno na hora
                 _release_instance()                   # libera a trava para a versão nova abrir
-                updater.launch(target)                # abre a versão nova sozinha (sem clicar em nada)
+                if not updater.launch(target):        # abre a versão nova e espera ela confirmar
+                    _message_box("A atualização foi instalada, mas a versão nova não abriu sozinha.\n\n"
+                                 f"Abra de novo o programa:\n{target}")
                 os._exit(0)
             except Exception as e:
                 log(f"Falha na atualização: {e}", "error")
@@ -714,6 +716,7 @@ def _release_instance() -> None:
 
 
 def main() -> None:
+    updater.mark_started(sys.argv)           # avisa a versão antiga (atualização) que esta abriu
     if IS_WIN and not is_admin():
         if relaunch_as_admin():
             return

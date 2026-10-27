@@ -383,8 +383,8 @@ OFFLINE_PACKS = [
      "desc": "Wi-Fi, Bluetooth e Intel HID — instaladores Dell embutidos.", "kind": "exe_folder"},
     {"key": "hp", "vendor": "hp", "folder": "Drivers HP", "title": "Pacote HP (offline)",
      "desc": "Wi-Fi e Bluetooth — instaladores HP embutidos.", "kind": "exe_folder"},
-    {"key": "lenovo_net", "vendor": "lenovo", "folder": "Drivers Lenovo", "title": "Rede Lenovo (offline)",
-     "desc": "Wi-Fi e cabo (Intel, Realtek, MediaTek, Qualcomm, Broadcom). Instala só o que a máquina usa.",
+    {"key": "lenovo_net", "vendor": "lenovo", "folder": "Drivers Lenovo", "title": "Wi-Fi Lenovo (offline)",
+     "desc": "Wi-Fi Intel, Realtek, MediaTek e Qualcomm. Instala só o que a máquina usa.",
      "kind": "inf_folder"},
     {"key": "portcode", "vendor": "lenovo", "folder": "portcode Lenovo", "title": "Portcode Lenovo",
      "desc": "Aplica o mapeamento de teclado (Portcode.reg).", "kind": "reg"},
@@ -494,9 +494,9 @@ def install_inf_folder(folder: Path | None, progress: Progress, cancel: threadin
 
 NET_MISSING_PS = r"""
 $ErrorActionPreference = 'SilentlyContinue'
-# dispositivos sem driver (código 28) que parecem placa de rede, ou da classe Net com problema
+# placa Wi-Fi sem driver (código 28) ou da classe Net com problema
 $d = @(Get-CimInstance Win32_PnPEntity | Where-Object {
-    ($_.ConfigManagerErrorCode -eq 28 -and ($_.PNPClass -eq 'Net' -or $_.Name -match 'Rede|Network|Ethernet|Wi-?Fi|Wireless|WLAN|802\.11|Controlador de rede|Network Controller' -or $_.PNPDeviceID -match '^PCI\\VEN_(8086|10EC|14C3|17CB|168C|14E4)'))
+    ($_.ConfigManagerErrorCode -eq 28 -and ($_.PNPClass -eq 'Net' -or $_.Name -match 'Rede|Network|Wi-?Fi|Wireless|WLAN|802\.11|Controlador de rede|Network Controller' -or $_.PNPDeviceID -match '^PCI\\VEN_(8086|10EC|14C3|17CB|168C|14E4)'))
     -or ($_.PNPClass -eq 'Net' -and $_.ConfigManagerErrorCode -ne 0 -and $_.ConfigManagerErrorCode -ne 22)
 })
 foreach ($x in $d) { Write-Output ($x.Name + ' [' + $x.PNPDeviceID + ']') }
