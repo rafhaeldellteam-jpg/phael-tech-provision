@@ -306,6 +306,12 @@ class Api:
         vendor = (inv or {}).get("vendor", "other")
         if key == "power":
             msg = provision.disable_fast_startup(prog, opts.get("power_button", True), opts.get("no_sleep", True))
+            try:   # sem rede não há Windows Update: instala os drivers de rede embutidos já na 1ª etapa
+                net = drivers.ensure_network_drivers(vendor, prog, self._cancel)
+                if net:
+                    msg += " " + net
+            except Exception as e:
+                log(f"Drivers de rede embutidos: {e}", "warn")
             if opts.get("trust_cert"):
                 try:
                     provision.trust_certificate()

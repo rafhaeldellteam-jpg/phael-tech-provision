@@ -383,6 +383,9 @@ OFFLINE_PACKS = [
      "desc": "Wi-Fi, Bluetooth e Intel HID — instaladores Dell embutidos.", "kind": "exe_folder"},
     {"key": "hp", "vendor": "hp", "folder": "Drivers HP", "title": "Pacote HP (offline)",
      "desc": "Wi-Fi e Bluetooth — instaladores HP embutidos.", "kind": "exe_folder"},
+    {"key": "lenovo_net", "vendor": "lenovo", "folder": "Drivers Lenovo", "title": "Rede Lenovo (offline)",
+     "desc": "Wi-Fi e cabo (Intel, Realtek, MediaTek, Qualcomm, Broadcom). Instala só o que a máquina usa.",
+     "kind": "inf_folder"},
     {"key": "portcode", "vendor": "lenovo", "folder": "portcode Lenovo", "title": "Portcode Lenovo",
      "desc": "Aplica o mapeamento de teclado (Portcode.reg).", "kind": "reg"},
     {"key": "lenovo_su", "vendor": "lenovo", "file": "Programas/system_update_5.08.03.59.exe",
@@ -418,6 +421,8 @@ def install_offline(pack: dict, progress: Progress, cancel: threading.Event) -> 
                 raise RuntimeError(f"Falha ao importar {r.name}: {res.stderr.strip()}")
             log(f"{r.name} aplicado ao registro.", "ok")
         return "Registro aplicado (reinicie para valer)."
+    if kind == "inf_folder":
+        return install_inf_folder(find_resource(pack["folder"]), progress, cancel)
     if kind == "exe":
         f = find_resource(pack["file"])
         if not f:
@@ -452,3 +457,62 @@ def install_offline(pack: dict, progress: Progress, cancel: threading.Event) -> 
         done += 1
     progress(100, "Pacote concluído")
     return "Pacote concluído" + (f" ({fails} falha(s))" if fails else "")
+
+
+# =========================================================================== drivers de rede embutidos (.inf)
+def install_inf_folder(folder: Path | None, progress: Progress, cancel: threading.Event) -> str:
+    """Registra todos os .inf da pasta e instala nos dispositivos presentes. O pnputil só instala o que
+    combina com o hardware da máquina; os demais ficam apenas guardados no repositório de drivers."""
+    infs = sorted(folder.rglob("*.inf")) if folder and folder.is_dir() else []
+    if not infs:
+        raise FileNotFoundError("Nenhum driver (.inf) no pacote.")
+    total, done, installed = len(infs), [0], [0]
+
+    def on_line(line: str) -> None:
+        low = line.lower()
+        if ".inf" in low and ("adding" in low or "adicionando" in low or "driver package" in low or "pacote de driver" in low):
+            done[0] += 1
+            progress(min(99.0, 100 * done[0] / total), f"Driver {min(done[0], total)}/{total}")
+        if "installed on" in low or "instalado no" in low or "instalado em" in low:
+            installed[0] += 1
+            log("  " + line.strip())
+
+    progress(1, f"Instalando drivers de rede ({total})…")
+    log(f"Drivers de rede embutidos: {total} pacote(s) em {folder}.")
+    rc = stream_cmd(["pnputil", "/add-driver", str(folder / "*.inf"), "/subdirs", "/install"], on_line,
+                    timeout=1800, cancel=cancel)
+    if cancel.is_set():
+        raise RuntimeError("Cancelado")
+    progress(100, "Drivers de rede aplicados")
+    msg = (f"{installed[0]} dispositivo(s) de rede atualizado(s)" if installed[0]
+           else "Drivers de rede registrados (nenhum dispositivo precisava)")
+    if rc == 3010:
+        msg += " — reinicie para concluir"
+    log(msg + ".", "ok")
+    return msg + "."
+
+
+NET_MISSING_PS = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+# dispositivos sem driver (código 28) que parecem placa de rede, ou da classe Net com problema
+$d = @(Get-CimInstance Win32_PnPEntity | Where-Object {
+    ($_.ConfigManagerErrorCode -eq 28 -and ($_.PNPClass -eq 'Net' -or $_.Name -match 'Rede|Network|Ethernet|Wi-?Fi|Wireless|WLAN|802\.11|Controlador de rede|Network Controller' -or $_.PNPDeviceID -match '^PCI\\VEN_(8086|10EC|14C3|17CB|168C|14E4)'))
+    -or ($_.PNPClass -eq 'Net' -and $_.ConfigManagerErrorCode -ne 0 -and $_.ConfigManagerErrorCode -ne 22)
+})
+foreach ($x in $d) { Write-Output ($x.Name + ' [' + $x.PNPDeviceID + ']') }
+"""
+
+
+def ensure_network_drivers(vendor: str, progress: Progress, cancel: threading.Event) -> str:
+    """No começo do provisionamento: se a placa de rede (Wi-Fi ou cabo) estiver sem driver, instala os
+    drivers de rede embutidos ANTES do Windows Update, que precisa de internet."""
+    pack = next((p for p in OFFLINE_PACKS if p["kind"] == "inf_folder" and p["vendor"] == vendor), None)
+    if not pack or not offline_available(pack) or not IS_WIN:
+        return ""
+    r = run_ps(NET_MISSING_PS, timeout=90)
+    missing = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+    if not missing:
+        log("Placas de rede com driver. Drivers de rede embutidos não foram necessários.")
+        return ""
+    log("Placa(s) de rede sem driver: " + "; ".join(missing[:4]), "warn")
+    return install_inf_folder(find_resource(pack["folder"]), progress, cancel)
