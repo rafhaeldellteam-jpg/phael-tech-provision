@@ -30,8 +30,12 @@ foreach ($m in $modelos) {
         $titulo = if ($d -is [string]) { $d } elseif ($d) { [string]$d.'#text' } else { '' }
         # só o driver Wi-Fi da Intel (pacotes que misturam Realtek/MediaTek ficam de fora)
         if ($titulo -notmatch '^Intel .*(Wireless LAN|WLAN)' -or $titulo -match 'Bluetooth|WWAN') { continue }
+        # pacotes mistos (ex.: '2024.0.8.141/6001.15/23.170' = Intel + Realtek) ficam de fora:
+        # a versão deles não é a do driver Intel e enganava a escolha do mais novo
+        $ver = [string]$pk.version
+        if ($ver -match '/') { continue }
         $v = [version]'0.0'
-        if (-not [version]::TryParse(([string]$pk.version -split '/')[0], [ref]$v)) { continue }
+        if (-not [version]::TryParse($ver, [ref]$v) -or $v.Major -ge 100) { continue }
         $pacotes += [pscustomobject]@{
             Titulo = $titulo; Versao = $v; Data = [string]$pk.ReleaseDate
             Url = $loc.Substring(0, $loc.LastIndexOf('/') + 1) + [string]$pk.Files.Installer.File.Name
