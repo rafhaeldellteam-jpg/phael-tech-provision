@@ -1,0 +1,12 @@
+name: Teste drivers Lenovo
+on:
+  push:
+    branches: ["teste-lenovo"]
+jobs:
+  teste:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tamanhos
+        shell: pwsh
+        run: ./tools/baixar_drivers_lenovo.ps1 *>&1 | Tee-Object -Variable out; Write-Host ("::notice title=Log::" + (($out | Out-String) -replace "`r?`n", ' || '))
