@@ -41,14 +41,13 @@ jobs:
           "SIGN_PFX=$pfx" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "Assinatura configurada: $($cert.Subject) ($($cert.Thumbprint))"
 
-      - name: Baixar drivers de Wi-Fi Lenovo (catálogo oficial, versões mais novas)
+      - name: Baixar driver Wi-Fi Intel da Lenovo (catálogo oficial, versão mais nova)
         shell: pwsh
         continue-on-error: true
         run: |
           ./tools/baixar_drivers_lenovo.ps1 -Destino 'Recursos/Drivers Lenovo'
           $l = (Get-Content 'Recursos/Drivers Lenovo/LEIA-ME.txt') -join ' || '
-          $t = [math]::Round(((Get-ChildItem 'Recursos/Drivers Lenovo' -Recurse | Measure-Object Length -Sum).Sum / 1MB), 1)
-          Write-Host "::notice title=Wi-Fi Lenovo ($t MB)::$l"
+          Write-Host "::notice title=Wi-Fi Lenovo::$l"
 
       - name: Instalar dependências
         run: python -m pip install -r requirements.txt

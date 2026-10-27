@@ -49,7 +49,7 @@ Recursos\
   Programas\                 Chrome, AnyDesk, WinRAR, Firefox, Brave, CrystalDiskInfo, CPU-Z, DDU, Lenovo System Update
   Drivers Dell\              pacote offline Dell (Wi-Fi, Bluetooth, Intel HID); pode receber o instalador do Dell Command Update
   Drivers HP\                pacote offline HP; pode receber o hp-hpia-x.y.z.exe
-  Drivers Lenovo\            drivers de Wi-Fi Lenovo (.inf) — baixados do catálogo oficial a cada versão
+  Drivers Lenovo\            instalador do Wi-Fi Intel da Lenovo — baixado do catálogo oficial a cada versão
   portcode Lenovo\           Portcode.reg
   LSUClient\                 módulo de drivers Lenovo (licença MIT)
   LibreHardwareMonitorLib.dll, HidSharp.dll   sensores de temperatura
@@ -144,9 +144,8 @@ Durante o provisionamento há também uma vigia: se a área de trabalho (explore
 
 Em notebooks, o topo da janela e o cartão Bateria (aba Hardware) mostram a cada 2 s se a máquina está **no carregador** ou **na bateria**, com a porcentagem e o tempo restante. Em desktops o indicador não aparece.
 
-## Drivers de Wi-Fi Lenovo embutidos
+## Driver Wi-Fi Lenovo embutido
 
-A cada versão, o GitHub baixa do catálogo oficial da Lenovo os drivers de **Wi-Fi** mais novos (Intel, Realtek, MediaTek e Qualcomm/Atheros), usando cerca de 50 modelos ThinkPad, ThinkBook, V, ThinkCentre e ThinkStation como referência. Drivers de rede cabeada não entram.
-Ficam só as pastas dos drivers (.inf), na versão mais nova de cada um, dentro de `Recursos\Drivers Lenovo`. O script é o `tools/baixar_drivers_lenovo.ps1`.
-- **No provisionamento:** se a máquina é Lenovo e a placa Wi-Fi está sem driver, ele instala esses drivers logo na primeira etapa, antes do Windows Update, que precisa de internet.
-- **Na aba Drivers:** botão "Wi-Fi Lenovo (offline)". O `pnputil` só instala o que combina com o hardware da máquina.
+A cada versão, o GitHub baixa do catálogo oficial da Lenovo o instalador do **driver Wi-Fi Intel** mais novo (cerca de 20 MB, compactado) e o coloca em `Recursos\Drivers Lenovo`. Ele cobre as placas AX201, AX211, AX4xx e BE200. O script é o `tools/baixar_drivers_lenovo.ps1`.
+- **No provisionamento:** se a máquina é Lenovo e a placa Wi-Fi está sem driver, ele extrai e instala o driver logo na primeira etapa, antes do Windows Update.
+- **Na aba Drivers:** botão "Wi-Fi Lenovo (offline)". O `pnputil` só instala se a placa for compatível.

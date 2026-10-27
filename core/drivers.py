@@ -384,8 +384,8 @@ OFFLINE_PACKS = [
     {"key": "hp", "vendor": "hp", "folder": "Drivers HP", "title": "Pacote HP (offline)",
      "desc": "Wi-Fi e Bluetooth — instaladores HP embutidos.", "kind": "exe_folder"},
     {"key": "lenovo_net", "vendor": "lenovo", "folder": "Drivers Lenovo", "title": "Wi-Fi Lenovo (offline)",
-     "desc": "Wi-Fi Intel, Realtek, MediaTek e Qualcomm. Instala só o que a máquina usa.",
-     "kind": "inf_folder"},
+     "desc": "Driver Wi-Fi Intel da Lenovo (AX201, AX211, AX4xx, BE200). Instala só se a placa for compatível.",
+     "kind": "lenovo_exe"},
     {"key": "portcode", "vendor": "lenovo", "folder": "portcode Lenovo", "title": "Portcode Lenovo",
      "desc": "Aplica o mapeamento de teclado (Portcode.reg).", "kind": "reg"},
     {"key": "lenovo_su", "vendor": "lenovo", "file": "Programas/system_update_5.08.03.59.exe",
@@ -423,6 +423,8 @@ def install_offline(pack: dict, progress: Progress, cancel: threading.Event) -> 
         return "Registro aplicado (reinicie para valer)."
     if kind == "inf_folder":
         return install_inf_folder(find_resource(pack["folder"]), progress, cancel)
+    if kind == "lenovo_exe":
+        return install_lenovo_exes(find_resource(pack["folder"]), progress, cancel)
     if kind == "exe":
         f = find_resource(pack["file"])
         if not f:
@@ -492,6 +494,31 @@ def install_inf_folder(folder: Path | None, progress: Progress, cancel: threadin
     return msg + "."
 
 
+def install_lenovo_exes(folder: Path | None, progress: Progress, cancel: threading.Event) -> str:
+    """Instaladores de driver da Lenovo (Inno Setup): extrai com /EXTRACT=YES (sem instalar nada às cegas)
+    e registra os .inf com o pnputil, que só instala o que combina com o hardware."""
+    exes = sorted(f for f in folder.iterdir() if f.suffix.lower() == ".exe") if folder and folder.is_dir() else []
+    if not exes:
+        raise FileNotFoundError("Nenhum instalador no pacote.")
+    msgs = []
+    for exe in exes:
+        if cancel.is_set():
+            raise RuntimeError("Cancelado")
+        dest = sub_work_dir("drivers-lenovo") / exe.stem
+        shutil.rmtree(dest, ignore_errors=True)
+        progress(-1, f"Extraindo {exe.name}…")
+        unblock(exe)
+        run([str(exe), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", f"/DIR={dest}", '/EXTRACT=YES'], timeout=600)
+        if not any(dest.rglob("*.inf")):
+            log(f"{exe.name}: nada extraído.", "warn")
+            continue
+        msgs.append(install_inf_folder(dest, progress, cancel))
+        shutil.rmtree(dest, ignore_errors=True)
+    if not msgs:
+        raise RuntimeError("Não foi possível extrair o driver.")
+    return " ".join(msgs)
+
+
 NET_MISSING_PS = r"""
 $ErrorActionPreference = 'SilentlyContinue'
 # placa Wi-Fi sem driver (código 28) ou da classe Net com problema
@@ -506,7 +533,7 @@ foreach ($x in $d) { Write-Output ($x.Name + ' [' + $x.PNPDeviceID + ']') }
 def ensure_network_drivers(vendor: str, progress: Progress, cancel: threading.Event) -> str:
     """No começo do provisionamento: se a placa de rede (Wi-Fi ou cabo) estiver sem driver, instala os
     drivers de rede embutidos ANTES do Windows Update, que precisa de internet."""
-    pack = next((p for p in OFFLINE_PACKS if p["kind"] == "inf_folder" and p["vendor"] == vendor), None)
+    pack = next((p for p in OFFLINE_PACKS if p["key"] == f"{vendor}_net"), None)
     if not pack or not offline_available(pack) or not IS_WIN:
         return ""
     r = run_ps(NET_MISSING_PS, timeout=90)
@@ -515,4 +542,4 @@ def ensure_network_drivers(vendor: str, progress: Progress, cancel: threading.Ev
         log("Placas de rede com driver. Drivers de rede embutidos não foram necessários.")
         return ""
     log("Placa(s) de rede sem driver: " + "; ".join(missing[:4]), "warn")
-    return install_inf_folder(find_resource(pack["folder"]), progress, cancel)
+    return install_offline(pack, progress, cancel)
