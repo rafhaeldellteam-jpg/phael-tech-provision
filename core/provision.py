@@ -232,10 +232,19 @@ try {
     $criteria = if ($onlyDrivers) { "IsInstalled=0 and IsHidden=0 and Type='Driver'" } else { "IsInstalled=0 and IsHidden=0" }
     P 2 'Procurando atualizacoes (Windows + drivers)...'
     $result = $searcher.Search($criteria)
+    $skip = @(__SKIP__)
     $list = @()
     foreach ($u in $result.Updates) {
-        # Ignora itens que exigem interacao do usuario
-        if ($u.InstallationBehavior.CanRequestUserInput) { L ('Ignorada (pede interacao): ' + $u.Title); continue }
+        $id = [string]$u.Identity.UpdateID
+        # Já tentada 2 vezes neste provisionamento e voltou de novo: esconde para não entrar em loop
+        if ($skip -contains $id) {
+            L ('Ignorada (ja instalada antes e oferecida de novo): ' + $u.Title)
+            try { $u.IsHidden = $true } catch {}
+            continue
+        }
+        # Drivers costumam marcar CanRequestUserInput mesmo instalando em silencio (o próprio Windows Update instala),
+        # então NÃO são mais ignorados; só pacotes de software que pedem interação ficam de fora.
+        if ($u.Type -ne 2 -and $u.InstallationBehavior.CanRequestUserInput) { L ('Ignorada (pede interacao): ' + $u.Title); continue }
         if (-not $u.EulaAccepted) { try { $u.AcceptEula() } catch {} }
         $list += $u
     }
@@ -258,6 +267,7 @@ try {
             $dl = $session.CreateUpdateDownloader(); $dl.Updates = $coll
             try { $null = $dl.Download() } catch { L ('Falha no download: ' + $u.Title + ' (' + $_.Exception.Message + ')'); $fail++; continue }
         }
+        Write-Output ('R|done=' + [string]$u.Identity.UpdateID)
         P ($base + $step / 2) ("Instalando {0}/{1}: {2}" -f $i, $total, $title)
         $ins = $session.CreateUpdateInstaller(); $ins.Updates = $coll
         try { $ins.ForceQuiet = $true } catch {}
@@ -268,6 +278,7 @@ try {
             if ($res.RebootRequired) { $reboot = $true }
         } catch { $fail++; L ('Erro ao instalar: ' + $u.Title + ' (' + $_.Exception.Message + ')') }
     }
+    try { if ((New-Object -ComObject Microsoft.Update.SystemInfo).RebootRequired) { $reboot = $true } } catch {}
     P 100 ("Concluido: {0} instalada(s), {1} falha(s)" -f $ok, $fail)
     Write-Output ("R|pending={0}" -f $total)
     Write-Output ("R|installed={0}" -f $ok)
@@ -293,15 +304,42 @@ def _parse_wu_line(line: str, progress: Progress, result: dict) -> None:
         log(msg, "error" if msg.startswith("ERRO") or msg.startswith("Falhou") else "info")
     elif line.startswith("R|") and "=" in line:
         k, v = line[2:].split("=", 1)
-        result[k.strip()] = int(v) if v.strip().lstrip("-").isdigit() else v.strip()
+        k, v = k.strip(), v.strip()
+        if k == "done":                      # lista de itens tentados (para não repetir em loop)
+            result.setdefault("done", []).append(v)
+        else:
+            result[k] = int(v) if v.lstrip("-").isdigit() else v
     else:
         log(line)
 
 
+def re_guid(v: str) -> bool:
+    import re
+    return bool(re.fullmatch(r"[0-9a-fA-F-]{36}", v or ""))
+
+
+def _bump_attempts(key: str, ids: list[str]) -> None:
+    """Conta quantas vezes cada item foi instalado neste provisionamento (fica salvo entre reinícios)."""
+    if not ids:
+        return
+    state = load_state()
+    seen = state.setdefault(key, {})
+    for i in ids:
+        seen[i] = int(seen.get(i, 0)) + 1
+    save_state(state)
+
+
+def _repeated(key: str, limit: int = 2) -> list[str]:
+    return [i for i, n in load_state().get(key, {}).items() if int(n) >= limit]
+
+
 def windows_update_round(progress: Progress, cancel: threading.Event, only_drivers: bool = False) -> dict:
     result: dict = {}
-    script = WU_PS.replace("__ONLY_DRIVERS__", "$true" if only_drivers else "$false")
+    skip = ",".join(f"'{i}'" for i in _repeated("wu_attempts") if re_guid(i))
+    script = (WU_PS.replace("__ONLY_DRIVERS__", "$true" if only_drivers else "$false")
+              .replace("__SKIP__", skip))
     rc = stream_ps(script, lambda ln: _parse_wu_line(ln, progress, result), timeout=4 * 3600, cancel=cancel)
+    _bump_attempts("wu_attempts", result.get("done", []))
     if cancel.is_set():
         raise RuntimeError("Cancelado")
     if rc != 0 and result.get("error"):
@@ -333,10 +371,11 @@ def windows_update(progress: Progress, cancel: threading.Event, max_rounds: int 
         log("Limite de 15 ciclos do Windows Update atingido — seguindo para a próxima etapa.", "warn")
         return "Limite de ciclos atingido; confira o Windows Update manualmente."
     progress(-1, "Abrindo o Windows Update…")
-    log("Abrindo Configurações > Windows Update e iniciando a verificação.")
-    show_windows_update(scan=True)
-    if cancel.wait(15):                      # dá tempo da tela começar a busca
-        raise RuntimeError("Cancelado")
+    # A tela fica aberta para acompanhar, mas quem instala é o programa: se a tela também
+    # instalasse ao mesmo tempo, as duas disputavam a mesma atualização e ambas falhavam
+    # (era o que acontecia com a atualização cumulativa — código 4).
+    log("Abrindo Configurações > Windows Update (a instalação é feita pelo programa).")
+    show_windows_update(scan=False)
     retries = 0
     for rnd in range(1, max_rounds + 1):
         log(f"Windows Update — verificação {rnd} (ciclo total {rounds_done + rnd}).")

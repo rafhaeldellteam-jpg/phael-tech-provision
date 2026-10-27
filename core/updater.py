@@ -137,8 +137,33 @@ def check() -> dict:
         return {"available": False, "error": "Sem conexão com a internet (ou o acesso ao GitHub está bloqueado na rede)."}
     ver = tag.lstrip("vV")
     url = ASSET.format(repo=GITHUB_REPO, ver=ver)
-    return {"available": _ver(ver) > _ver(APP_VERSION), "current": APP_VERSION, "version": ver,
+    newer = _ver(ver) > _ver(APP_VERSION)
+    if newer and not _asset_ready(url + ".sha256"):
+        # a versão acabou de ser publicada e o GitHub ainda está montando o .exe (leva ~5 min):
+        # não oferece ainda — antes isso dava 'HTTP 404' e falha na atualização
+        log(f"Versão {ver} publicada, mas o .exe ainda está sendo preparado no GitHub. Tento de novo depois.")
+        return {"available": False, "current": APP_VERSION, "version": ver, "preparing": True,
+                "error": f"A versão {ver} está sendo preparada no GitHub. Tente de novo em alguns minutos."}
+    return {"available": newer, "current": APP_VERSION, "version": ver,
             "url": url, "sha_url": url + ".sha256"}
+
+
+def _asset_ready(url: str) -> bool:
+    """O arquivo da release já existe? (404 = ainda não foi anexado)"""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA}, method="HEAD")
+        with _opener().open(req, timeout=15):
+            return True
+    except urllib.error.HTTPError as e:
+        return e.code != 404
+    except Exception:
+        try:
+            out = _ps(f"$r = [Net.HttpWebRequest]::Create('{url}'); $r.Proxy = $proxy; $r.Method = 'HEAD'; "
+                      f"$r.UserAgent = '{UA}'; try {{ $x = $r.GetResponse(); $x.Close(); 'OK' }} "
+                      "catch [Net.WebException] { if ($_.Exception.Response.StatusCode.value__ -eq 404) { 'NAO' } else { 'OK' } }", 40)
+            return "NAO" not in out
+        except Exception:
+            return True
 
 
 def download(info: dict, progress: Callable[[float], None]) -> Path:
@@ -254,7 +279,7 @@ def launch(target: Path) -> None:
                      creationflags=DETACHED | NEW_GROUP)
 
 
-def wait_previous_instance(argv: list[str], webview_dir: Path, limit: float = 45.0) -> None:
+def wait_previous_instance(argv: list[str], webview_dir: Path, limit: float = 25.0) -> None:
     """Chamado pela versão NOVA ao abrir depois de uma atualização: espera a versão antiga e o
     navegador interno dela (msedgewebview2) saírem de vez. Se a janela nova abrisse antes, as duas
     disputavam a mesma pasta do WebView2 e a interface travava (era o 'bugou' depois de atualizar)."""
@@ -303,3 +328,20 @@ def cleanup_old_copies() -> None:
         if not left:
             return
         time.sleep(5)
+
+
+def kill_own_children() -> None:
+    """Fecha na hora os processos filhos deste programa (navegador interno WebView2, PowerShell dos
+    sensores), para a versão nova não precisar esperar por eles."""
+    try:
+        import psutil
+        me = psutil.Process()
+        kids = me.children(recursive=True)
+        for k in kids:
+            try:
+                k.kill()
+            except psutil.Error:
+                pass
+        psutil.wait_procs(kids, timeout=5)
+    except Exception:
+        pass

@@ -26,6 +26,8 @@ STEP_ORDER = ["power", "office", "wu", "vendor", "finalize"]
 # Etapas do mesmo grupo rodam ao mesmo tempo: o Office instala junto com o Windows Update;
 # os drivers do fabricante só começam depois que o Windows Update terminar.
 STEP_GROUPS = [["power"], ["office", "wu"], ["vendor"], ["finalize"]]
+MAX_REBOOTS = 6          # no máximo 6 reinícios por provisionamento (proteção contra loop)
+MAX_VENDOR_REBOOTS = 2   # a etapa do fabricante pede reinício no máximo 2 vezes
 STEP_TITLES = {"power": "Energia", "office": "Microsoft Office", "wu": "Windows Update",
                "vendor": "Drivers do fabricante", "finalize": "Finalização"}
 
@@ -163,6 +165,8 @@ class Api:
         if not steps:
             self._busy.release()
             return {"ok": False, "msg": "Nenhuma etapa marcada."}
+        if not opts.get("resumed"):
+            provision.clear_state()          # provisionamento novo: zera contadores de tentativas/reinícios
         threading.Thread(target=self._provision_worker, args=(steps, opts), daemon=True).start()
         return {"ok": True}
 
@@ -208,6 +212,21 @@ class Api:
                 for t in threads:
                     t.join()
                 if reboot_msgs:
+                    st = provision.load_state()
+                    count = int(st.get("reboots", 0)) + 1
+                    if count > MAX_REBOOTS:
+                        # trava de segurança: nunca fica reiniciando sem parar
+                        log(f"Limite de {MAX_REBOOTS} reinicializações neste provisionamento atingido — "
+                            "seguindo sem reiniciar de novo. Reinicie ao final.", "warn")
+                        for k in keys:
+                            if results.get(k) == "reboot":
+                                results[k] = "ok"
+                                self._emit({"t": "step", "key": k, "status": "ok", "pct": 100,
+                                            "text": "Concluído (reinicie ao final)"})
+                        reboot_msgs.clear()
+                        continue
+                    st["reboots"] = count
+                    provision.save_state(st)
                     # o que pediu reinício continua depois; o que ainda não rodou também
                     pending = [k for k in steps if results.get(k) in (None, "reboot")]
                     self._schedule_reboot(pending, opts, reboot_msgs[0])
@@ -263,8 +282,18 @@ class Api:
         if key == "vendor":
             # se o Windows Update fez parte do provisionamento, os drivers do catálogo Microsoft já entraram
             wu_together = "wu" in opts.get("_parallel", [])
-            return drivers.vendor_drivers(vendor, prog, self._cancel, opts.get("include_bios", False),
-                                          wu_fallback=not wu_together, inv=inv)
+            try:
+                return drivers.vendor_drivers(vendor, prog, self._cancel, opts.get("include_bios", False),
+                                              wu_fallback=not wu_together, inv=inv)
+            except NeedsReboot:
+                st = provision.load_state()
+                n = int(st.get("vendor_reboots", 0)) + 1
+                st["vendor_reboots"] = n
+                provision.save_state(st)
+                if n > MAX_VENDOR_REBOOTS:
+                    log("O fabricante pediu reinício de novo; para não entrar em loop, a etapa termina aqui.", "warn")
+                    return "Drivers do fabricante aplicados (reinicie ao final)."
+                raise
         if key == "finalize":
             self._inventory = None
             return provision.finalize(prog, self.inventory())
@@ -555,11 +584,12 @@ class Api:
                 self._emit({"t": "upd", "status": "restart", "pct": 100})
                 time.sleep(1.5)
                 self._sensors.stop()
-                _release_instance()                   # libera a trava para a versão nova abrir
-                updater.launch(target)                # a nova espera esta fechar por completo
                 closer = threading.Thread(target=lambda: self._window and self._window.destroy(), daemon=True)
                 closer.start()
-                closer.join(4)                        # fecha a janela (e o WebView2) se der; senão força
+                closer.join(3)                        # fecha a janela se der…
+                updater.kill_own_children()           # …e encerra o navegador interno na hora
+                _release_instance()                   # libera a trava para a versão nova abrir
+                updater.launch(target)                # abre a versão nova sozinha (sem clicar em nada)
                 os._exit(0)
             except Exception as e:
                 log(f"Falha na atualização: {e}", "error")

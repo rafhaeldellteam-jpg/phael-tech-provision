@@ -635,3 +635,15 @@ dialog p { color: var(--muted); white-space: pre-line; }
 .btn.big { height: 52px; font-size: 15px; }
 .btn.danger.big { background: var(--bad); color: #fff; }
 @media (max-width: 1180px) { .seal-grid { grid-template-columns: 1fr; } .pack-body { flex-direction: column; } }
+
+/* energia ao vivo */
+.power-block.on .ic { color: var(--ok); }
+.power-block.off .ic { color: var(--warn); }
+.power-block.low .ic { color: var(--bad); }
+.power-block.on strong { color: var(--ok); }
+.power-block.low strong { color: var(--bad); }
+.power-live { display: flex; align-items: center; gap: 10px; margin: 6px 0 4px; font-weight: 600; }
+.power-live .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 4px var(--warn-soft); }
+.power-live.on .dot { background: var(--ok); box-shadow: 0 0 0 4px var(--ok-soft); animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 7px transparent; } }
+@media (max-width: 1380px) { .m-block:nth-child(2) { display: none; } }

@@ -289,6 +289,18 @@ def evaluate_health(inv: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- ao vivo
+def _power() -> dict | None:
+    """Carregador ligado ou não (só notebooks). None = desktop/sem bateria."""
+    try:
+        b = psutil.sensors_battery()
+    except Exception:
+        return None
+    if b is None:
+        return None
+    secs = b.secsleft if isinstance(b.secsleft, int) and b.secsleft > 0 else None
+    return {"plugged": bool(b.power_plugged), "percent": round(b.percent), "secsleft": secs}
+
+
 def live_metrics() -> dict:
     if psutil is None:
         return {}
@@ -310,5 +322,6 @@ def live_metrics() -> dict:
         "cpu": psutil.cpu_percent(interval=None),
         "mem_pct": vm.percent, "mem_used": vm.used, "mem_total": vm.total,
         "uptime": int(time.time() - boot),
+        "power": _power(),
         "volumes": vols,
     }

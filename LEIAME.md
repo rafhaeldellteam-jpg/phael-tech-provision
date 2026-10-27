@@ -119,3 +119,14 @@ Para Positivo (e outras marcas sem catálogo), basta copiar os drivers (.inf) pa
 
 O certificado é autoassinado, então o Windows só reconhece "Phael Tech" como editor nas máquinas que confiam nele. Para isso, ligue a opção "Confiar no certificado digital da Phael Tech" no provisionamento.
 Para sumir o aviso do SmartScreen em qualquer computador, é preciso um certificado comercial (OV, de US$ 150 a 300 por ano). Basta trocar os dois segredos pelo certificado novo; o resto continua igual.
+
+## Proteções contra repetição e loop de reinício
+
+- **Windows Update e Lenovo:** o programa guarda cada atualização/driver já tentado em `estado.json`. Se o Windows ou o catálogo da Lenovo oferecer de novo o mesmo item depois de instalado, ele é ignorado (e ocultado no Windows Update) em vez de ser baixado outra vez.
+- **Lenovo:** pacotes que forçam reinício sozinhos (BIOS/firmware com RebootType 1/5) só entram com "Incluir BIOS e firmware". O reinício só é pedido quando um pacote que precisa dele foi instalado com sucesso.
+- **Limite de reinícios:** no máximo 6 reinícios automáticos no provisionamento inteiro e 2 por causa dos drivers do fabricante. Passando disso, ele conclui as etapas e avisa para reiniciar no final.
+- **Configurações do Windows Update** abrem só para acompanhar. Quem instala é o programa, para não haver duas instalações ao mesmo tempo.
+
+## Energia ao vivo
+
+Em notebooks, o topo da janela e o cartão Bateria (aba Hardware) mostram a cada 2 s se a máquina está **no carregador** ou **na bateria**, com a porcentagem e o tempo restante. Em desktops o indicador não aparece.

@@ -153,13 +153,26 @@ function L($t) { Write-Output ("L|" + $t) }
 try {
     Import-Module (Join-Path __MOD__ 'LSUClient.psd1') -Force
     $dl = __DL__
+    $skip = @(__SKIP__)
+    $bios = __BIOS__
     New-Item -ItemType Directory -Path $dl -Force | Out-Null
     P 3 'Consultando o catalogo da Lenovo para este modelo...'
     $all = @(Get-LSUpdate -WarningAction SilentlyContinue)
     $todo = @($all | Where-Object { $_.Installer.Unattended })
     $skipped = $all.Count - $todo.Count
-    if (-not __BIOS__) { $todo = @($todo | Where-Object { $_.Type -ne 'BIOS' -and $_.Category -notmatch 'BIOS|UEFI' -and $_.Title -notmatch 'BIOS|UEFI' }) }
     if ($skipped -gt 0) { L ("{0} pacote(s) exigem interacao e foram ignorados." -f $skipped) }
+    # BIOS/UEFI só com a opção marcada
+    if (-not $bios) { $todo = @($todo | Where-Object { $_.Type -ne 'BIOS' -and $_.Category -notmatch 'BIOS|UEFI' -and $_.Title -notmatch 'BIOS|UEFI' }) }
+    # Pacotes que REINICIAM A MÁQUINA SOZINHOS no meio da instalação (RebootType 1 e 5) ficam de fora,
+    # exceto BIOS que o LSUClient instala sem reiniciar (winuptp/Flash.cmd). Eles causavam reinícios em sequência.
+    $forced = @($todo | Where-Object { $_.RebootType -in 1,5 -and $_.Installer.Command -notmatch 'winuptp|Flash\.cmd' })
+    foreach ($f in $forced) { L ('Ignorado (reinicia a maquina sozinho durante a instalacao): ' + $f.Title) }
+    $todo = @($todo | Where-Object { $forced -notcontains $_ })
+    # Já instalado neste provisionamento e oferecido de novo depois de reiniciar = detecção do pacote falha.
+    # Não instala de novo (era isso que fazia baixar os mesmos drivers e reiniciar várias vezes).
+    $again = @($todo | Where-Object { $skip -contains $_.ID })
+    foreach ($a in $again) { L ('Ja instalado antes neste provisionamento, nao repete: ' + $a.Title) }
+    $todo = @($todo | Where-Object { $skip -notcontains $_.ID })
     if ($todo.Count -eq 0) { P 100 'Nenhum driver Lenovo pendente'; Write-Output 'R|pending=0'; exit 0 }
     L ("Encontrados {0} pacote(s) Lenovo:" -f $todo.Count)
     foreach ($u in $todo) { L ('  - ' + $u.Title) }
@@ -167,14 +180,16 @@ try {
     foreach ($u in $todo) {
         $i++
         $base = 5 + 90 * ($i - 1) / $todo.Count
+        Write-Output ('R|done=' + $u.ID)
         P $base ("Baixando {0}/{1}: {2}" -f $i, $todo.Count, $u.Title)
         try { Save-LSUpdate -Package $u -Path $dl -WarningAction SilentlyContinue | Out-Null } catch { L ('Falha no download: ' + $u.Title); $fail++; continue }
         P ($base + 45 / $todo.Count) ("Instalando {0}/{1}: {2}" -f $i, $todo.Count, $u.Title)
         $wv = $null
         $out = Install-LSUpdate -Package $u -Path $dl -SaveBIOSUpdateInfoToRegistry -WarningVariable wv -WarningAction SilentlyContinue
-        if ($wv -and $wv.Count -gt 0) { $fail++; L ('Falhou: ' + $u.Title + ' — ' + ($wv | Select-Object -First 1)) }
-        else { $ok++; L ('OK: ' + $u.Title) }
-        if ($u.RebootType -in 1,3,4 -or ($out -match 'BIOS UPDATE SUCCESS')) { $reboot = $true }
+        if ($wv -and $wv.Count -gt 0) { $fail++; L ('Falhou: ' + $u.Title + ' - ' + ($wv | Select-Object -First 1)); continue }
+        $ok++; L ('OK: ' + $u.Title)
+        # só pede reinício quem instalou de verdade e precisa (3 = reiniciar, 4 = desligar)
+        if ($u.RebootType -in 3,4 -or ($out -match 'BIOS UPDATE SUCCESS')) { $reboot = $true }
     }
     P 100 ("Lenovo: {0} instalado(s), {1} falha(s)" -f $ok, $fail)
     Write-Output ("R|pending={0}" -f $todo.Count)
@@ -190,15 +205,17 @@ try {
 
 
 def lenovo_update(progress: Progress, cancel: threading.Event, include_bios: bool = False) -> str:
-    from .provision import _parse_wu_line
+    from .provision import _bump_attempts, _parse_wu_line, _repeated
     mod = find_resource("LSUClient")
     if not mod:
         raise FileNotFoundError("Módulo LSUClient não encontrado na pasta Recursos.")
     result: dict = {}
     script = (LENOVO_PS.replace("__MOD__", ps_quote(str(mod)))
               .replace("__DL__", ps_quote(str(sub_work_dir("lenovo"))))
-              .replace("__BIOS__", "$true" if include_bios else "$false"))
+              .replace("__BIOS__", "$true" if include_bios else "$false")
+              .replace("__SKIP__", ",".join(ps_quote(i) for i in _repeated("lenovo_attempts", 1))))
     stream_ps(script, lambda ln: _parse_wu_line(ln, progress, result), timeout=3 * 3600, cancel=cancel)
+    _bump_attempts("lenovo_attempts", result.get("done", []))
     if cancel.is_set():
         raise RuntimeError("Cancelado")
     if result.get("error"):

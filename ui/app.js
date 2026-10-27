@@ -403,7 +403,7 @@
       ["TPM", inv.tpm ? "Versão " + inv.tpm : "Não encontrado"],
       ["Inicialização rápida", inv.fast_startup === 0 ? "Desativada" : inv.fast_startup === 1 ? "Ativada" : "—"],
     ])}</dl>`;
-    $("#c-bat").innerHTML = (b ? `<div class="lead">${b.health ? "Saúde " + b.health + "%" : "Bateria presente"}</div>
+    $("#c-bat").innerHTML = (b ? `<div class="power-live" id="power-live"><span class="dot"></span>Lendo energia…</div><div class="lead">${b.health ? "Saúde " + b.health + "%" : "Bateria presente"}</div>
       <div class="facts"><span class="chip">Carga ${b.charge}%</span>${b.design ? `<span class="chip">Capacidade ${Math.round(b.full / 1000)} de ${Math.round(b.design / 1000)} Wh</span>` : ""}</div>`
       : `<div class="lead">Sem bateria (desktop)</div>`) + sec;
 
@@ -435,6 +435,26 @@
   });
   $("#restart-btn").addEventListener("click", () => showModal("Reiniciar o computador?", "Salve o que estiver aberto antes de continuar."));
 
+  function fmtLeft(sec) {
+    if (!sec) return "";
+    const h = Math.floor(sec / 3600), mm = Math.floor((sec % 3600) / 60);
+    return h ? `${h}h${String(mm).padStart(2, "0")}` : `${mm} min`;
+  }
+  function renderPower(p) {
+    const blk = $("#m-power");
+    if (!p) { blk.hidden = true; return; }
+    blk.hidden = false;
+    const low = !p.plugged && p.percent <= 20;
+    blk.className = "m-block power-block " + (p.plugged ? "on" : low ? "low" : "off");
+    $("#m-power-label").textContent = p.plugged ? "No carregador" : "Na bateria";
+    $("#m-power-text").textContent = p.plugged ? `${p.percent}% · carregando` : `${p.percent}%${p.secsleft ? " · " + fmtLeft(p.secsleft) + " restantes" : ""}`;
+    $("#m-power-ic use").setAttribute("href", p.plugged ? "#i-plug" : "#i-battery");
+    const live = $("#power-live");
+    if (live) {
+      live.className = "power-live " + (p.plugged ? "on" : "");
+      live.innerHTML = `<span class="dot"></span>${p.plugged ? "Ligado no carregador" : "Fora do carregador (na bateria)"} — ${p.percent}%`;
+    }
+  }
   function pollLive() {
     api.live().then((m) => {
       if (!m || m.error) return;
@@ -443,6 +463,7 @@
         if (bar) { bar.style.width = pct + "%"; bar.parentElement.className = "bar" + (pct > 90 ? " bad" : pct > 75 ? " warn" : ""); }
         if (txt) txt.textContent = label;
       };
+      renderPower(m.power);
       set("live-cpu", m.cpu, Math.round(m.cpu) + "%");
       set("live-mem", m.mem_pct, Math.round(m.mem_pct) + "%");
       if (m.uptime) {
@@ -856,7 +877,7 @@
       }
       if (b.continuing && b.state?.pending?.length) handleResume(b.state);
       loadInventory(false).then(pollLive);
-      setInterval(pollLive, 3000);
+      setInterval(pollLive, 2000);
       if (!(b.continuing && b.state?.pending?.length)) setTimeout(() => checkUpdates(false), 4000);
     });
   }
