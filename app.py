@@ -48,6 +48,7 @@ class Api:
         self._sensors = maintenance.SensorReader()
         self._continuing = "--continuar" in sys.argv
         self._provisioning = False        # liga a vigia da área de trabalho só durante o provisionamento
+        self._updating = False            # atualização em andamento: o processo não pode terminar
         log.add_sink(lambda ts, level, msg: self._emit({"t": "log", "ts": ts, "level": level, "msg": msg}))
         threading.Thread(target=self._shell_watchdog, daemon=True).start()
 
@@ -629,14 +630,17 @@ class Api:
                 log("Download conferido (SHA-256). Instalando a atualização…", "ok")
                 target = updater.apply(path)          # troca o .exe agora (falha = erro na tela)
                 self._emit({"t": "upd", "status": "restart", "pct": 100})
-                time.sleep(1.5)
+                time.sleep(1.0)
+                # IMPORTANTE: a janela NÃO é fechada antes de abrir a versão nova. Fechar a janela faz o
+                # webview.start() retornar, o main() terminar e o Python encerrar na hora — matando esta
+                # thread antes de abrir o .exe novo. Era por isso que a versão nova nunca abria sozinha.
+                self._updating = True
+                kids = updater.snapshot_children()    # navegador interno e sensores DESTA versão
                 self._sensors.stop()
-                closer = threading.Thread(target=lambda: self._window and self._window.destroy(), daemon=True)
-                closer.start()
-                closer.join(3)                        # fecha a janela se der…
-                updater.kill_own_children()           # …e encerra o navegador interno na hora
                 _release_instance()                   # libera a trava para a versão nova abrir
-                if not updater.launch(target):        # abre a versão nova e espera ela confirmar
+                ok = updater.launch(target)           # abre a versão nova e espera ela confirmar
+                updater.kill_pids(kids)               # só agora fecha o navegador interno desta versão
+                if not ok:
                     _message_box("A atualização foi instalada, mas a versão nova não abriu sozinha.\n\n"
                                  f"Abra de novo o programa:\n{target}")
                 os._exit(0)
@@ -756,6 +760,9 @@ def main() -> None:
         _message_box("Não foi possível abrir a interface (Microsoft Edge WebView2 ausente?).\n\n"
                      "Coloque o arquivo MicrosoftEdgeWebview2Setup.exe na pasta Recursos ou instale o "
                      f"WebView2 Runtime e abra novamente.\n\nDetalhe: {e}")
+    # se a janela fechar no meio de uma atualização, espera a troca terminar (ela encerra o processo)
+    while api._updating:
+        time.sleep(1)
 
 
 if __name__ == "__main__":

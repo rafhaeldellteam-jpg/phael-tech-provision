@@ -435,18 +435,27 @@ def cleanup_old_copies() -> None:
         time.sleep(5)
 
 
-def kill_own_children() -> None:
-    """Fecha na hora os processos filhos deste programa (navegador interno WebView2, PowerShell dos
-    sensores), para a versão nova não precisar esperar por eles."""
+def snapshot_children() -> list[int]:
+    """PIDs dos processos filhos deste programa agora (navegador interno WebView2, PowerShell dos sensores)."""
     try:
         import psutil
-        me = psutil.Process()
-        kids = me.children(recursive=True)
-        for k in kids:
+        return [k.pid for k in psutil.Process().children(recursive=True)]
+    except Exception:
+        return []
+
+
+def kill_pids(pids: list[int]) -> None:
+    """Fecha só os processos da lista (nunca a versão nova, que foi aberta depois da lista)."""
+    try:
+        import psutil
+        procs = []
+        for pid in pids:
             try:
-                k.kill()
+                p = psutil.Process(pid)
+                p.kill()
+                procs.append(p)
             except psutil.Error:
                 pass
-        psutil.wait_procs(kids, timeout=5)
+        psutil.wait_procs(procs, timeout=5)
     except Exception:
         pass

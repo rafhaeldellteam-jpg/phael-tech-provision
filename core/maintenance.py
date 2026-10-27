@@ -244,7 +244,10 @@ $comp.IsCpuEnabled = $true; $comp.IsGpuEnabled = $true; $comp.IsMemoryEnabled = 
 $comp.IsMotherboardEnabled = $true; $comp.IsStorageEnabled = $true; $comp.IsBatteryEnabled = $true
 $comp.Open()
 $outFile = __OUT_FILE__
+$dono = __PARENT_PID__
 while ($true) {
+    # o programa fechou (ou caiu): encerra junto, em vez de ficar rodando escondido
+    if (-not (Get-Process -Id $dono -ErrorAction SilentlyContinue)) { break }
     $cpuT = @(); $cpuL = $null; $gpuT = @(); $gpuL = $null; $memL = $null; $boardT = @()
     $disks = New-Object System.Collections.ArrayList; $fans = New-Object System.Collections.ArrayList
     $cpuP = $null; $diskMax = @{}; $fanSeen = @{}
@@ -313,7 +316,7 @@ class SensorReader:
         if not dll or not IS_WIN:
             self.error = "LibreHardwareMonitorLib.dll não encontrada — sensores indisponíveis."
             return False
-        script = SENSORS_PS.replace("__DLL_DIR__", ps_quote(str(dll.parent))).replace("__OUT_FILE__", ps_quote(str(self.out)))
+        script = SENSORS_PS.replace("__DLL_DIR__", ps_quote(str(dll.parent))).replace("__OUT_FILE__", ps_quote(str(self.out))).replace("__PARENT_PID__", str(os.getpid()))
         ps1 = sub_work_dir("sensores") / "sensores.ps1"
         ps1.write_text(script, encoding="utf-8-sig")
         self.proc = subprocess.Popen(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1)],
