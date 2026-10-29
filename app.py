@@ -302,10 +302,20 @@ class Api:
             log(f"{STEP_TITLES[key]}: {e}", "error")
             self._emit({"t": "step", "key": key, "status": "err", "pct": 0, "text": str(e)[:160]})
 
+    def _vendor(self) -> str:
+        """Fabricante sem esperar o inventário completo (que leva até 1 min na primeira vez)."""
+        if self._inventory and not self._inventory.get("error"):
+            return self._inventory.get("vendor", "other")
+        try:
+            return sysinfo.quick_vendor()
+        except Exception:
+            return "other"
+
     def _run_step(self, key: str, prog, opts: dict) -> str:
-        inv = self.inventory()
-        vendor = (inv or {}).get("vendor", "other")
+        # Office e Windows Update começam NA HORA; só as etapas que precisam do inventário esperam por ele
         if key == "power":
+            prog(5, "Desativando inicialização rápida…")
+            vendor = self._vendor()
             msg = provision.disable_fast_startup(prog, opts.get("power_button", True), opts.get("no_sleep", True))
             try:   # sem rede não há Windows Update: instala os drivers de rede embutidos já na 1ª etapa
                 net = drivers.ensure_network_drivers(vendor, prog, self._cancel)
@@ -324,6 +334,8 @@ class Api:
         if key == "wu":
             return provision.windows_update(prog, self._cancel)
         if key == "vendor":
+            inv = self.inventory()
+            vendor = (inv or {}).get("vendor", "other")
             # se o Windows Update fez parte do provisionamento, os drivers do catálogo Microsoft já entraram
             wu_together = "wu" in opts.get("_plan", opts.get("_parallel", []))
             try:

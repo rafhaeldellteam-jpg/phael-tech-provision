@@ -172,6 +172,17 @@ $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 } | ConvertTo-Json -Compress -Depth 6
 """
 
+def quick_vendor() -> str:
+    """Só o fabricante (1 consulta rápida), para não esperar o inventário completo."""
+    if not IS_WIN:
+        return "other"
+    r = run_ps("(Get-CimInstance Win32_ComputerSystem).Manufacturer + ' | ' + (Get-CimInstance Win32_BIOS).Manufacturer",
+               timeout=40)
+    t = r.stdout.lower()
+    return ("dell" if "dell" in t else "lenovo" if "lenovo" in t else "hp" if ("hp" in t or "hewlett" in t)
+            else "positivo" if any(x in t for x in ("positivo", "vaio", "quantum")) else "other")
+
+
 VENDOR_LABEL = {"dell": "Dell", "lenovo": "Lenovo", "hp": "HP", "positivo": "Positivo", "other": "Outro"}
 SERIAL_LABEL = {"dell": "Service Tag", "lenovo": "Número de série (S/N)", "hp": "Número de série (S/N)",
                 "positivo": "Número de série (S/N)", "other": "Número de série"}

@@ -330,9 +330,35 @@ WU_PS = r"""
 $ErrorActionPreference = 'Stop'
 function P($pct, $t) { Write-Output ("P|{0}|{1}" -f [int]$pct, $t) }
 function L($t) { Write-Output ("L|" + $t) }
+# Baixa/instala mostrando a porcentagem ao vivo (Begin*/GetProgress). Se o Windows não aceitar o modo
+# assíncrono, cai no modo normal (sem porcentagem, mas funciona igual).
+function RunJob($obj, $kind, $base, $span, $label) {
+    $job = $null
+    try { if ($kind -eq 'dl') { $job = $obj.BeginDownload($null, $null, $null) } else { $job = $obj.BeginInstall($null, $null, $null) } } catch { $job = $null }
+    if ($null -eq $job) { if ($kind -eq 'dl') { return $obj.Download() } else { return $obj.Install() } }
+    $last = -1
+    while (-not $job.IsCompleted) {
+        try {
+            $pr = $job.GetProgress()
+            $pc = [int]$pr.PercentComplete
+            if ($pc -ne $last) {
+                $last = $pc
+                $extra = ''
+                if ($kind -eq 'dl') {
+                    $tot = [double]$pr.CurrentUpdateBytesToDownload; $got = [double]$pr.CurrentUpdateBytesDownloaded
+                    if ($tot -gt 0) { $extra = (' ({0:N0} de {1:N0} MB)' -f ($got / 1MB), ($tot / 1MB)) }
+                }
+                P ($base + $span * $pc / 100) ('{0} - {1}%{2}' -f $label, $pc, $extra)
+            }
+        } catch {}
+        Start-Sleep -Milliseconds 700
+    }
+    if ($kind -eq 'dl') { return $obj.EndDownload($job) } else { return $obj.EndInstall($job) }
+}
 $onlyDrivers = __ONLY_DRIVERS__
 try {
     # Garante os servicos necessarios
+    P 1 'Iniciando os servicos do Windows Update...'
     foreach ($s in 'wuauserv','bits','cryptsvc') { try { Set-Service $s -StartupType Manual -ErrorAction SilentlyContinue; Start-Service $s -ErrorAction SilentlyContinue } catch {} }
     $session = New-Object -ComObject Microsoft.Update.Session
     $session.ClientApplicationID = 'Phael Tech Provision'
@@ -340,6 +366,7 @@ try {
     $muId = '7971f918-a847-4430-9279-4a52d1efe18d'
     $useMU = $false
     if (-not $onlyDrivers) {
+        P 1 'Conectando ao Microsoft Update (Windows, drivers e Office)...'
         try {
             $sm = New-Object -ComObject Microsoft.Update.ServiceManager
             $sm.ClientApplicationID = 'Phael Tech Provision'
@@ -349,8 +376,9 @@ try {
     }
     if ($useMU) { $searcher.ServerSelection = 3; $searcher.ServiceID = $muId } else { $searcher.ServerSelection = 2 }
     $criteria = if ($onlyDrivers) { "IsInstalled=0 and IsHidden=0 and Type='Driver'" } else { "IsInstalled=0 and IsHidden=0" }
-    P 2 'Procurando atualizacoes (Windows + drivers)...'
+    P 2 'Procurando atualizacoes e drivers...'
     $result = $searcher.Search($criteria)
+    Write-Output 'R|searched=1'
     $skip = @(__SKIP__)
     $list = @()
     foreach ($u in $result.Updates) {
@@ -387,7 +415,7 @@ try {
         if (-not $u.IsDownloaded) {
             P ($base) ("Baixando {0}/{1}: {2}" -f $i, $total, $title)
             $dl = $session.CreateUpdateDownloader(); $dl.Updates = $coll
-            try { $null = $dl.Download() } catch { L ('Falha no download: ' + $u.Title + ' (' + $_.Exception.Message + ')'); $fail++; continue }
+            try { $null = RunJob $dl 'dl' $base ($step / 2) ("Baixando {0}/{1}: {2}" -f $i, $total, $title) } catch { L ('Falha no download: ' + $u.Title + ' (' + $_.Exception.Message + ')'); $fail++; continue }
         }
         $key = [string]$u.Identity.UpdateID + '_' + [string]$u.Identity.RevisionNumber
         Write-Output ('R|try=' + $key)
@@ -395,7 +423,7 @@ try {
         $ins = $session.CreateUpdateInstaller(); $ins.Updates = $coll
         try { $ins.ForceQuiet = $true } catch {}
         try {
-            $res = $ins.Install()
+            $res = RunJob $ins 'in' ($base + $step / 2) ($step / 2) ("Instalando {0}/{1}: {2}" -f $i, $total, $title)
             $code = $res.GetUpdateResult(0).ResultCode
             if ($code -eq 2 -or $code -eq 3) {
                 $ok++; L ('OK: ' + $u.Title); Write-Output ('R|ok=' + $key)
@@ -440,6 +468,33 @@ def _parse_wu_line(line: str, progress: Progress, result: dict) -> None:
         log(line)
 
 
+class _Heartbeat:
+    """Repassa o progresso e, quando o Windows Update fica um tempo sem dar notícia (busca demorada,
+    atualização grande), mostra o tempo correndo — a tela nunca fica parada em 'Procurando…'."""
+
+    def __init__(self, progress: Progress) -> None:
+        self._progress = progress
+        self._pct, self._text, self._since, self._last = -1.0, "", time.time(), time.time()
+        self._stop = threading.Event()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def __call__(self, pct: float, text: str) -> None:
+        if text.split(" - ")[0] != self._text.split(" - ")[0]:
+            self._since = time.time()          # fase nova: o relógio recomeça
+        self._pct, self._text, self._last = pct, text, time.time()
+        self._progress(pct, text)
+
+    def _run(self) -> None:
+        while not self._stop.wait(2):
+            if self._text and time.time() - self._last >= 3:
+                el = int(time.time() - self._since)
+                tempo = f"{el // 60} min {el % 60:02d} s" if el >= 60 else f"{el} s"
+                self._progress(self._pct, f"{self._text} · {tempo}")
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
 def _safe_ids(ids: list[str]) -> list[str]:
     import re
     return [i for i in ids if re.fullmatch(r"[0-9A-Za-z_.\-]{1,80}", i or "")]
@@ -450,9 +505,11 @@ def windows_update_round(progress: Progress, cancel: threading.Event, only_drive
     skip = ",".join(f"'{i}'" for i in _safe_ids(history_skip("wu")))
     script = (WU_PS.replace("__ONLY_DRIVERS__", "$true" if only_drivers else "$false")
               .replace("__SKIP__", skip))
+    beat = _Heartbeat(progress)
     try:
-        rc = stream_ps(script, lambda ln: _parse_wu_line(ln, progress, result), timeout=4 * 3600, cancel=cancel)
+        rc = stream_ps(script, lambda ln: _parse_wu_line(ln, beat, result), timeout=4 * 3600, cancel=cancel)
     finally:
+        beat.stop()
         history_add("wu", "try", result.get("try", []))
         history_add("wu", "ok", result.get("ok", []))
     if cancel.is_set():
@@ -484,11 +541,12 @@ def windows_update(progress: Progress, cancel: threading.Event, max_rounds: int 
     if rounds_done >= 15:
         log("Limite de 15 ciclos do Windows Update atingido — seguindo para a próxima etapa.", "warn")
         return "Limite de ciclos atingido; confira o Windows Update manualmente."
-    progress(-1, "Abrindo o Windows Update…")
+    progress(1, "Abrindo o Windows Update…")
     # A tela fica aberta para acompanhar, mas quem instala é o programa: se a tela também
     # instalasse ao mesmo tempo, as duas disputavam a mesma atualização e ambas falhavam
     # (era o que acontecia com a atualização cumulativa — código 4).
-    log("Abrindo Configurações > Windows Update (a instalação é feita pelo programa).")
+    log("Windows Update: o programa procura e instala (Windows, drivers e Office) e mostra o andamento aqui. "
+        "A tela de Configurações fica aberta só para acompanhar.")
     show_windows_update(scan=False)
     retries = 0
     for rnd in range(1, max_rounds + 1):
